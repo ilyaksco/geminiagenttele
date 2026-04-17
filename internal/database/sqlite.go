@@ -20,7 +20,9 @@ type ManagedBot struct {
 	BotID    int64
 	OwnerID  int64
 	Username string
+	Name        string
 	Token    string
+	SystemPrompt string
 }
 
 func New(dbURL string) *DB {
@@ -53,6 +55,7 @@ func New(dbURL string) *DB {
 			bot_id INTEGER PRIMARY KEY,
 			owner_id INTEGER NOT NULL DEFAULT 0,
 			username TEXT NOT NULL DEFAULT '',
+			name TEXT NOT NULL DEFAULT '',
 			token TEXT NOT NULL,
 			system_prompt TEXT DEFAULT ''
 		);`,
@@ -65,6 +68,7 @@ func New(dbURL string) *DB {
 		}
 	}
 
+	_, _ = conn.Exec(`ALTER TABLE managed_bots ADD COLUMN name TEXT DEFAULT '';`)
 	_, _ = conn.Exec(`ALTER TABLE managed_bots ADD COLUMN username TEXT DEFAULT '';`)
 	_, _ = conn.Exec(`ALTER TABLE chat_history ADD COLUMN bot_id INTEGER DEFAULT 0;`)
 	_, _ = conn.Exec(`ALTER TABLE managed_bots ADD COLUMN owner_id INTEGER DEFAULT 0;`)
@@ -72,29 +76,6 @@ func New(dbURL string) *DB {
 
 	log.Println("Database connection established and tables verified")
 	return &DB{Conn: conn}
-}
-
-func (db *DB) SetUserLang(userID int64, lang string) error {
-	query := `INSERT INTO users (id, language) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET language = ?;`
-	_, err := db.Conn.Exec(query, userID, lang, lang)
-	if err != nil {
-		log.Printf("Error setting user language: %v\n", err)
-	}
-	return err
-}
-
-func (db *DB) GetUserLang(userID int64) string {
-	var lang string
-	query := `SELECT language FROM users WHERE id = ?;`
-	err := db.Conn.QueryRow(query, userID).Scan(&lang)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return "en"
-		}
-		log.Printf("Error getting user language: %v\n", err)
-		return "en"
-	}
-	return lang
 }
 
 func (db *DB) SetUserAPIKeys(userID int64, encryptedKeys string) {
@@ -153,36 +134,46 @@ func (db *DB) GetHistory(botID int64, chatID int64, threadID int, limit int) []C
 	return history
 }
 
-func (db *DB) SaveManagedBot(botID int64, ownerID int64, username string, token string) {
-	query := `INSERT INTO managed_bots (bot_id, owner_id, username, token) VALUES (?, ?, ?, ?) ON CONFLICT(bot_id) DO UPDATE SET token = ?, username = ?, owner_id = ?;`
-	_, err := db.Conn.Exec(query, botID, ownerID, username, token, token, username, ownerID)
+func (db *DB) SaveManagedBot(botID int64, ownerID int64, username string, name string, token string) {
+	query := `INSERT INTO managed_bots (bot_id, owner_id, username, name, token) VALUES (?, ?, ?, ?, ?) ON CONFLICT(bot_id) DO UPDATE SET token = ?, username = ?, name = ?, owner_id = ?;`
+	_, err := db.Conn.Exec(query, botID, ownerID, username, name, token, token, username, name, ownerID)
 	if err != nil {
 		log.Printf("Failed to save managed bot: %v\n", err)
 	}
 }
 
-func (db *DB) GetManagedBots() []ManagedBot {
-	query := `SELECT bot_id, owner_id, username, token FROM managed_bots;`
-	rows, err := db.Conn.Query(query)
+func (db *DB) GetManagedBot(botID int64) *ManagedBot {
+	var bot ManagedBot
+	var prompt sql.NullString
+	
+	query := `SELECT bot_id, owner_id, username, name, token, system_prompt FROM managed_bots WHERE bot_id = ?;`
+	err := db.Conn.QueryRow(query, botID).Scan(&bot.BotID, &bot.OwnerID, &bot.Username, &bot.Name, &bot.Token, &prompt)
 	if err != nil {
-		log.Printf("Failed to fetch managed bots: %v\n", err)
 		return nil
 	}
-	defer rows.Close()
-
-	var bots []ManagedBot
-	for rows.Next() {
-		var bot ManagedBot
-		if err := rows.Scan(&bot.BotID, &bot.OwnerID, &bot.Username, &bot.Token); err != nil {
-			continue
-		}
-		bots = append(bots, bot)
+	
+	if prompt.Valid {
+		bot.SystemPrompt = prompt.String
+	} else {
+		bot.SystemPrompt = ""
 	}
-	return bots
+	
+	return &bot
+}
+
+func (db *DB) DeleteManagedBot(botID int64, ownerID int64) bool {
+	query := `DELETE FROM managed_bots WHERE bot_id = ? AND owner_id = ?;`
+	res, err := db.Conn.Exec(query, botID, ownerID)
+	if err != nil {
+		log.Printf("Failed to delete bot: %v\n", err)
+		return false
+	}
+	rows, _ := res.RowsAffected()
+	return rows > 0
 }
 
 func (db *DB) GetBotsByOwner(ownerID int64) []ManagedBot {
-	query := `SELECT bot_id, username FROM managed_bots WHERE owner_id = ?;`
+	query := `SELECT bot_id, name FROM managed_bots WHERE owner_id = ?;`
 	rows, err := db.Conn.Query(query, ownerID)
 	if err != nil {
 		log.Printf("Failed to fetch user bots: %v\n", err)
@@ -193,7 +184,7 @@ func (db *DB) GetBotsByOwner(ownerID int64) []ManagedBot {
 	var bots []ManagedBot
 	for rows.Next() {
 		var bot ManagedBot
-		if err := rows.Scan(&bot.BotID, &bot.Username); err != nil {
+		if err := rows.Scan(&bot.BotID, &bot.Name); err != nil {
 			continue
 		}
 		bots = append(bots, bot)
@@ -211,9 +202,9 @@ func (db *DB) GetBotOwner(botID int64) int64 {
 	return ownerID
 }
 
-func (db *DB) SetBotPromptByOwner(ownerID int64, username string, prompt string) bool {
-	query := `UPDATE managed_bots SET system_prompt = ? WHERE LOWER(username) = LOWER(?) AND owner_id = ?;`
-	res, err := db.Conn.Exec(query, prompt, username, ownerID)
+func (db *DB) SetBotPrompt(botID int64, prompt string) bool {
+	query := `UPDATE managed_bots SET system_prompt = ? WHERE bot_id = ?;`
+	res, err := db.Conn.Exec(query, prompt, botID)
 	if err != nil {
 		log.Printf("Failed to set bot prompt: %v\n", err)
 		return false
@@ -233,4 +224,64 @@ func (db *DB) GetBotPrompt(botID int64) string {
 		return prompt.String
 	}
 	return ""
+}
+
+func (db *DB) SetUserLang(userID int64, lang string) error {
+	query := `INSERT INTO users (id, language) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET language = ?;`
+	_, err := db.Conn.Exec(query, userID, lang, lang)
+	if err != nil {
+		log.Printf("Error setting user language: %v\n", err)
+	}
+	return err
+}
+
+func (db *DB) GetUserLang(userID int64) string {
+	var lang string
+	query := `SELECT language FROM users WHERE id = ?;`
+	err := db.Conn.QueryRow(query, userID).Scan(&lang)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return "en"
+		}
+		log.Printf("Error getting user language: %v\n", err)
+		return "en"
+	}
+	return lang
+}
+
+func (db *DB) SetBotPromptByOwner(ownerID int64, username string, prompt string) bool {
+	query := `UPDATE managed_bots SET system_prompt = ? WHERE LOWER(username) = LOWER(?) AND owner_id = ?;`
+	res, err := db.Conn.Exec(query, prompt, username, ownerID)
+	if err != nil {
+		log.Printf("Failed to set bot prompt: %v\n", err)
+		return false
+	}
+	rows, _ := res.RowsAffected()
+	return rows > 0
+}
+
+func (db *DB) GetManagedBots() []ManagedBot {
+	query := `SELECT bot_id, owner_id, username, name, token, system_prompt FROM managed_bots;`
+	rows, err := db.Conn.Query(query)
+	if err != nil {
+		log.Printf("Failed to fetch all managed bots: %v\n", err)
+		return nil
+	}
+	defer rows.Close()
+
+	var bots []ManagedBot
+	for rows.Next() {
+		var bot ManagedBot
+		var prompt sql.NullString
+		
+		if err := rows.Scan(&bot.BotID, &bot.OwnerID, &bot.Username, &bot.Name, &bot.Token, &prompt); err == nil {
+			if prompt.Valid {
+				bot.SystemPrompt = prompt.String
+			}
+			bots = append(bots, bot)
+		} else {
+			log.Printf("Failed to scan bot data: %v\n", err)
+		}
+	}
+	return bots
 }

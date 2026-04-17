@@ -77,9 +77,11 @@ type SendMessageReq struct {
 }
 
 type EditMessageTextReq struct {
-	ChatID    int64  `json:"chat_id"`
-	MessageID int    `json:"message_id"`
-	Text      string `json:"text"`
+	ChatID      int64       `json:"chat_id"`
+	MessageID   int         `json:"message_id"`
+	Text        string      `json:"text"`
+	ParseMode   string      `json:"parse_mode,omitempty"`
+	ReplyMarkup interface{} `json:"reply_markup,omitempty"`
 }
 
 type SendChatActionReq struct {

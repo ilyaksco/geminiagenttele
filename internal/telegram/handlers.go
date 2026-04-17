@@ -60,12 +60,90 @@ func (h *Handler) handleManagedBotUpdate(mb *ManagedBotUpdated) {
 		return
 	}
 
-	h.db.SaveManagedBot(mb.Bot.ID, mb.User.ID, mb.Bot.Username, token)
-	log.Printf("Successfully registered managed bot @%s created by User %d\n", mb.Bot.Username, mb.User.ID)
+	tempClient := NewClient(token)
+	me, err := tempClient.GetMe()
+	
+	botUsername := mb.Bot.Username
+	botName := mb.Bot.FirstName
+
+	if err == nil && me != nil {
+		botUsername = me.Username
+		botName = me.FirstName
+	}
+
+	h.db.SaveManagedBot(mb.Bot.ID, mb.User.ID, botUsername, botName, token)
+	log.Printf("Successfully registered managed bot @%s (%s) created by User %d\n", botUsername, botName, mb.User.ID)
 
 	if h.OnNewBot != nil {
 		h.OnNewBot(mb.Bot.ID, token)
 	}
+}
+
+func (h *Handler) sendBotDashboard(chatID int64, msgID int, botID int64, lang string) {
+	bot := h.db.GetManagedBot(botID)
+	if bot == nil {
+		h.sendMainMenu(chatID, 0, msgID, lang, h.i18n.Get(lang, "error_occurred"))
+		return
+	}
+
+	text := fmt.Sprintf("🤖 **Bot Dashboard**\n\n**Name:** %s\n**Prompt:** `%s`", bot.Name, bot.SystemPrompt)
+	if bot.SystemPrompt == "" {
+		text = fmt.Sprintf("🤖 **Bot Dashboard**\n\n**Name:** %s\n**Prompt:** _Not set_", bot.Name)
+	}
+
+	btnSetPrompt := "📝 Set Prompt"
+	btnDelete := "🗑️ Delete Bot"
+	btnBack := "🔙 Back"
+	if lang == "id" {
+		btnSetPrompt = "📝 Atur Prompt"
+		btnDelete = "🗑️ Hapus Bot"
+		btnBack = "🔙 Kembali"
+	}
+
+	markup := InlineKeyboardMarkup{
+		InlineKeyboard: [][]InlineKeyboardButton{
+			{{Text: "🚀 Open Bot", URL: "https://t.me/" + bot.Username}},
+			{{Text: btnSetPrompt, CallbackData: fmt.Sprintf("bot_prompt_%d", botID)}},
+			{{Text: btnDelete, CallbackData: fmt.Sprintf("bot_delete_%d", botID)}},
+			{{Text: btnBack, CallbackData: "action_mybots"}},
+		},
+	}
+
+	h.editMsg(chatID, msgID, text, true, markup)
+}
+
+func (h *Handler) handleDeleteBotFlow(chatID int64, msgID int, botID int64, lang string, confirm bool) {
+	bot := h.db.GetManagedBot(botID)
+	if bot == nil {
+		h.sendMainMenu(chatID, 0, msgID, lang, h.i18n.Get(lang, "error_occurred"))
+		return
+	}
+
+	if !confirm {
+		text := fmt.Sprintf("⚠️ **Confirmation**\n\nAre you sure you want to delete **%s** (@%s)?\nThis action cannot be undone.", bot.Name, bot.Username)
+		if lang == "id" {
+			text = fmt.Sprintf("⚠️ **Konfirmasi**\n\nApakah Anda yakin ingin menghapus **%s** (@%s)?\nAksi ini tidak dapat dibatalkan.", bot.Name, bot.Username)
+		}
+
+		btnYes := "✅ Yes, Delete"
+		btnNo := "❌ No, Cancel"
+		if lang == "id" {
+			btnYes = "✅ Ya, Hapus"
+			btnNo = "❌ Tidak, Batal"
+		}
+
+		markup := InlineKeyboardMarkup{
+			InlineKeyboard: [][]InlineKeyboardButton{
+				{{Text: btnYes, CallbackData: fmt.Sprintf("bot_confirmdel_%d", botID)}},
+				{{Text: btnNo, CallbackData: fmt.Sprintf("bot_manage_%d", botID)}},
+			},
+		}
+		h.editMsg(chatID, msgID, text, true, markup)
+		return
+	}
+
+	h.db.DeleteManagedBot(botID, h.db.GetBotOwner(botID))
+	h.sendMyBots(h.db.GetBotOwner(botID), chatID, 0, msgID, lang)
 }
 
 func (h *Handler) handleMessage(m *Message) {
@@ -88,6 +166,25 @@ func (h *Handler) handleMessage(m *Message) {
 		state := h.userStates[m.From.ID]
 		h.stateMu.RUnlock()
 
+		if strings.HasPrefix(state, "awaiting_prompt_") {
+			botIDStr := strings.TrimPrefix(state, "awaiting_prompt_")
+			var targetBotID int64
+			fmt.Sscanf(botIDStr, "%d", &targetBotID)
+
+			success := h.db.SetBotPrompt(targetBotID, m.Text)
+			h.stateMu.Lock()
+			delete(h.userStates, m.From.ID)
+			h.stateMu.Unlock()
+
+			if success {
+				h.sendMsg(m.Chat.ID, m.MessageThreadID, m.MessageID, "✅ Prompt updated successfully!", true, nil)
+			} else {
+				h.sendMsg(m.Chat.ID, m.MessageThreadID, m.MessageID, "❌ Failed to update prompt.", true, nil)
+			}
+			h.sendBotDashboard(m.Chat.ID, 0, targetBotID, lang)
+			return
+		}
+
 		if state == "awaiting_api_key" {
 			rawKeys := strings.ReplaceAll(m.Text, " ", "")
 			encrypted, err := crypto.Encrypt(rawKeys, h.EncryptionKey)
@@ -101,27 +198,29 @@ func (h *Handler) handleMessage(m *Message) {
 			h.stateMu.Lock()
 			delete(h.userStates, m.From.ID)
 			h.stateMu.Unlock()
+			
+			h.sendMainMenu(m.Chat.ID, m.MessageThreadID, 0, lang, h.i18n.Get(lang, "welcome"))
 			return
 		}
 
 		if strings.HasPrefix(m.Text, "/start") {
 			msg := h.i18n.Get(lang, "welcome")
-			h.sendMainMenu(m.Chat.ID, m.MessageThreadID, lang, msg)
+			h.sendMainMenu(m.Chat.ID, m.MessageThreadID, 0, lang, msg)
 			return
 		}
 
 		if strings.HasPrefix(m.Text, "/link") {
-			h.handleCreateBotFlow(m.Chat.ID, m.MessageThreadID, lang)
+			h.handleCreateBotFlow(m.Chat.ID, m.MessageThreadID, 0, lang)
 			return
 		}
 
 		if strings.HasPrefix(m.Text, "/mybots") {
-			h.sendMyBots(m.From.ID, m.Chat.ID, m.MessageThreadID, lang)
+			h.sendMyBots(m.From.ID, m.Chat.ID, m.MessageThreadID, 0, lang)
 			return
 		}
 
 		if strings.HasPrefix(m.Text, "/setapi") {
-			h.handleSetApiFlow(m.From.ID, m.Chat.ID, m.MessageThreadID, lang)
+			h.handleSetApiFlow(m.From.ID, m.Chat.ID, m.MessageThreadID, 0, lang)
 			return
 		}
 
@@ -145,13 +244,12 @@ func (h *Handler) handleMessage(m *Message) {
 		}
 
 		if strings.HasPrefix(m.Text, "/help") {
-			msg := h.i18n.Get(lang, "help_message")
-			h.sendMsg(m.Chat.ID, m.MessageThreadID, m.MessageID, msg, true, nil)
+			h.sendHelpMenu(m.Chat.ID, m.MessageThreadID, 0, lang)
 			return
 		}
 
 		if strings.HasPrefix(m.Text, "/lang") {
-			h.sendLangMenu(m.Chat.ID, m.MessageThreadID, lang)
+			h.sendLangMenu(m.Chat.ID, m.MessageThreadID, 0, lang)
 			return
 		}
 
@@ -192,7 +290,12 @@ func (h *Handler) handleMessage(m *Message) {
 	}
 
 	if strings.HasPrefix(m.Text, "/start") {
-		msg := h.i18n.Get(lang, "welcome")
+		var msg string
+		if lang == "id" {
+			msg = fmt.Sprintf("Halo, saya adalah **%s**! Apa yang bisa saya bantu hari ini?", h.BotUser.FirstName)
+		} else {
+			msg = fmt.Sprintf("Hello, I am **%s**! How can I help you today?", h.BotUser.FirstName)
+		}
 		h.sendMsg(m.Chat.ID, m.MessageThreadID, m.MessageID, msg, true, nil)
 		return
 	}
@@ -343,15 +446,47 @@ func (h *Handler) handleCallbackQuery(cq *CallbackQuery) {
 	lang := h.db.GetUserLang(cq.From.ID)
 	parts := strings.Split(cq.Data, "_")
 
+	msgID := 0
+	if cq.Message != nil {
+		msgID = cq.Message.MessageID
+	}
+
+	if parts[0] == "bot" && len(parts) >= 3 {
+		botIDStr := parts[2]
+		var targetBotID int64
+		fmt.Sscanf(botIDStr, "%d", &targetBotID)
+
+		switch parts[1] {
+		case "manage":
+			h.sendBotDashboard(cq.Message.Chat.ID, msgID, targetBotID, lang)
+		case "prompt":
+			text := "📝 **Set System Prompt**\n\nPlease send the new prompt text for this bot."
+			if lang == "id" {
+				text = "📝 **Setel System Prompt**\n\nSilakan kirim teks prompt baru untuk bot ini."
+			}
+			h.stateMu.Lock()
+			h.userStates[cq.From.ID] = fmt.Sprintf("awaiting_prompt_%d", targetBotID)
+			h.stateMu.Unlock()
+			h.editMsg(cq.Message.Chat.ID, msgID, text, true, InlineKeyboardMarkup{
+				InlineKeyboard: [][]InlineKeyboardButton{{{Text: "🔙 Back", CallbackData: fmt.Sprintf("bot_manage_%d", targetBotID)}}},
+			})
+		case "delete":
+			h.handleDeleteBotFlow(cq.Message.Chat.ID, msgID, targetBotID, lang, false)
+		case "confirmdel":
+			h.handleDeleteBotFlow(cq.Message.Chat.ID, msgID, targetBotID, lang, true)
+		}
+		return
+	}
+
+	h.stateMu.Lock()
+	delete(h.userStates, cq.From.ID)
+	h.stateMu.Unlock()
+
 	if len(parts) == 2 && parts[0] == "lang" {
 		newLang := parts[1]
 		h.db.SetUserLang(cq.From.ID, newLang)
-		if cq.Message != nil {
-			h.tg.EditMessageText(EditMessageTextReq{
-				ChatID:    cq.Message.Chat.ID,
-				MessageID: cq.Message.MessageID,
-				Text:      h.i18n.Get(newLang, "lang_changed"),
-			})
+		if msgID != 0 {
+			h.sendMainMenu(cq.Message.Chat.ID, cq.Message.MessageThreadID, msgID, newLang, h.i18n.Get(newLang, "lang_changed")+"\n\n"+h.i18n.Get(newLang, "welcome"))
 		}
 		return
 	}
@@ -359,35 +494,43 @@ func (h *Handler) handleCallbackQuery(cq *CallbackQuery) {
 	if parts[0] == "action" {
 		switch parts[1] {
 		case "create":
-			h.handleCreateBotFlow(cq.Message.Chat.ID, cq.Message.MessageThreadID, lang)
+			h.handleCreateBotFlow(cq.Message.Chat.ID, cq.Message.MessageThreadID, msgID, lang)
 		case "mybots":
-			h.sendMyBots(cq.From.ID, cq.Message.Chat.ID, cq.Message.MessageThreadID, lang)
+			h.sendMyBots(cq.From.ID, cq.Message.Chat.ID, cq.Message.MessageThreadID, msgID, lang)
 		case "help":
-			h.sendMsg(cq.Message.Chat.ID, cq.Message.MessageThreadID, 0, h.i18n.Get(lang, "help_message"), true, nil)
+			h.sendHelpMenu(cq.Message.Chat.ID, cq.Message.MessageThreadID, msgID, lang)
 		case "setapi":
-			h.handleSetApiFlow(cq.From.ID, cq.Message.Chat.ID, cq.Message.MessageThreadID, lang)
-		case "cancelapi":
-			h.stateMu.Lock()
-			delete(h.userStates, cq.From.ID)
-			h.stateMu.Unlock()
-			h.sendMsg(cq.Message.Chat.ID, cq.Message.MessageThreadID, 0, h.i18n.Get(lang, "action_canceled"), true, nil)
+			h.handleSetApiFlow(cq.From.ID, cq.Message.Chat.ID, cq.Message.MessageThreadID, msgID, lang)
+		case "lang":
+			h.sendLangMenu(cq.Message.Chat.ID, cq.Message.MessageThreadID, msgID, lang)
+		case "back", "cancelapi":
+			h.sendMainMenu(cq.Message.Chat.ID, cq.Message.MessageThreadID, msgID, lang, h.i18n.Get(lang, "welcome"))
 		}
 	}
 }
 
-func (h *Handler) handleCreateBotFlow(chatID int64, threadID int, lang string) {
+func (h *Handler) handleCreateBotFlow(chatID int64, threadID int, msgID int, lang string) {
 	link := fmt.Sprintf("https://t.me/newbot/%s/my_new_bot", h.BotUser.Username)
 	btnTxt := h.i18n.Get(lang, "btn_go_create")
+	btnBack := "🔙 Back"
+	if lang == "id" {
+		btnBack = "🔙 Kembali"
+	}
 
 	markup := InlineKeyboardMarkup{
 		InlineKeyboard: [][]InlineKeyboardButton{
 			{{Text: btnTxt, URL: link}},
+			{{Text: btnBack, CallbackData: "action_back"}},
 		},
 	}
-	h.sendMsg(chatID, threadID, 0, h.i18n.Get(lang, "create_bot_instruction"), true, markup)
+	if msgID == 0 {
+		h.sendMsg(chatID, threadID, 0, h.i18n.Get(lang, "create_bot_instruction"), true, markup)
+	} else {
+		h.editMsg(chatID, msgID, h.i18n.Get(lang, "create_bot_instruction"), true, markup)
+	}
 }
 
-func (h *Handler) handleSetApiFlow(userID int64, chatID int64, threadID int, lang string) {
+func (h *Handler) handleSetApiFlow(userID int64, chatID int64, threadID int, msgID int, lang string) {
 	encryptedKeys := h.db.GetUserAPIKeys(userID)
 	currentKeys := "None"
 	if encryptedKeys != "" {
@@ -398,11 +541,11 @@ func (h *Handler) handleSetApiFlow(userID int64, chatID int64, threadID int, lan
 	}
 
 	text := fmt.Sprintf(h.i18n.Get(lang, "set_api_instruction"), currentKeys)
-
 	btnCancel := h.i18n.Get(lang, "btn_cancel")
+
 	markup := InlineKeyboardMarkup{
 		InlineKeyboard: [][]InlineKeyboardButton{
-			{{Text: btnCancel, CallbackData: "action_cancelapi"}},
+			{{Text: btnCancel, CallbackData: "action_back"}},
 		},
 	}
 
@@ -410,38 +553,58 @@ func (h *Handler) handleSetApiFlow(userID int64, chatID int64, threadID int, lan
 	h.userStates[userID] = "awaiting_api_key"
 	h.stateMu.Unlock()
 
-	h.sendMsg(chatID, threadID, 0, text, true, markup)
+	if msgID == 0 {
+		h.sendMsg(chatID, threadID, 0, text, true, markup)
+	} else {
+		h.editMsg(chatID, msgID, text, true, markup)
+	}
 }
 
-func (h *Handler) sendMyBots(userID int64, chatID int64, threadID int, lang string) {
+func (h *Handler) sendMyBots(userID int64, chatID int64, threadID int, msgID int, lang string) {
 	bots := h.db.GetBotsByOwner(userID)
+	btnBack := "🔙 Back"
+	if lang == "id" {
+		btnBack = "🔙 Kembali"
+	}
+	
+	var buttons [][]InlineKeyboardButton
+
 	if len(bots) == 0 {
-		h.sendMsg(chatID, threadID, 0, h.i18n.Get(lang, "no_bots_msg"), true, nil)
+		buttons = append(buttons, []InlineKeyboardButton{{Text: btnBack, CallbackData: "action_back"}})
+		markup := InlineKeyboardMarkup{InlineKeyboard: buttons}
+		if msgID == 0 {
+			h.sendMsg(chatID, threadID, 0, h.i18n.Get(lang, "no_bots_msg"), true, markup)
+		} else {
+			h.editMsg(chatID, msgID, h.i18n.Get(lang, "no_bots_msg"), true, markup)
+		}
 		return
 	}
 
 	msg := h.i18n.Get(lang, "my_bots_msg")
-	var buttons [][]InlineKeyboardButton
-
 	for _, bot := range bots {
-		botUrl := "https://t.me/" + bot.Username
 		buttons = append(buttons, []InlineKeyboardButton{
-			{Text: "@" + bot.Username, URL: botUrl},
+			{Text: "🤖 " + bot.Name, CallbackData: fmt.Sprintf("bot_manage_%d", bot.BotID)},
 		})
 	}
+	buttons = append(buttons, []InlineKeyboardButton{{Text: btnBack, CallbackData: "action_back"}})
 
 	markup := InlineKeyboardMarkup{
 		InlineKeyboard: buttons,
 	}
 
-	h.sendMsg(chatID, threadID, 0, msg, true, markup)
+	if msgID == 0 {
+		h.sendMsg(chatID, threadID, 0, msg, true, markup)
+	} else {
+		h.editMsg(chatID, msgID, msg, true, markup)
+	}
 }
 
-func (h *Handler) sendMainMenu(chatID int64, threadID int, lang string, text string) {
+func (h *Handler) sendMainMenu(chatID int64, threadID int, msgID int, lang string, text string) {
 	btnCreate := h.i18n.Get(lang, "btn_create")
 	btnMyBots := h.i18n.Get(lang, "btn_mybots")
 	btnHelp := h.i18n.Get(lang, "btn_help")
 	btnSetApi := h.i18n.Get(lang, "btn_setapi")
+	btnLang := "🌐 Language"
 
 	markup := InlineKeyboardMarkup{
 		InlineKeyboard: [][]InlineKeyboardButton{
@@ -451,18 +614,29 @@ func (h *Handler) sendMainMenu(chatID int64, threadID int, lang string, text str
 			},
 			{
 				{Text: btnMyBots, CallbackData: "action_mybots"},
+				{Text: btnLang, CallbackData: "action_lang"},
+			},
+			{
 				{Text: btnHelp, CallbackData: "action_help"},
 			},
 		},
 	}
 
-	h.sendMsg(chatID, threadID, 0, text, true, markup)
+	if msgID == 0 {
+		h.sendMsg(chatID, threadID, 0, text, true, markup)
+	} else {
+		h.editMsg(chatID, msgID, text, true, markup)
+	}
 }
 
-func (h *Handler) sendLangMenu(chatID int64, threadID int, lang string) {
+func (h *Handler) sendLangMenu(chatID int64, threadID int, msgID int, lang string) {
 	text := h.i18n.Get(lang, "choose_lang")
 	btnEn := h.i18n.Get(lang, "btn_en")
 	btnId := h.i18n.Get(lang, "btn_id")
+	btnBack := "🔙 Back"
+	if lang == "id" {
+		btnBack = "🔙 Kembali"
+	}
 
 	markup := InlineKeyboardMarkup{
 		InlineKeyboard: [][]InlineKeyboardButton{
@@ -470,10 +644,17 @@ func (h *Handler) sendLangMenu(chatID int64, threadID int, lang string) {
 				{Text: btnEn, CallbackData: "lang_en"},
 				{Text: btnId, CallbackData: "lang_id"},
 			},
+			{
+				{Text: btnBack, CallbackData: "action_back"},
+			},
 		},
 	}
 
-	h.sendMsg(chatID, threadID, 0, text, true, markup)
+	if msgID == 0 {
+		h.sendMsg(chatID, threadID, 0, text, true, markup)
+	} else {
+		h.editMsg(chatID, msgID, text, true, markup)
+	}
 }
 
 func (h *Handler) sendMsg(chatID int64, threadID int, replyToID int, text string, useHTML bool, markup interface{}) {
@@ -481,16 +662,23 @@ func (h *Handler) sendMsg(chatID int64, threadID int, replyToID int, text string
 		text = formatToHTML(text)
 	}
 
-	runes := []rune(text)
-	chunkSize := 4000
-
-	for i := 0; i < len(runes); i += chunkSize {
-		end := i + chunkSize
-		if end > len(runes) {
-			end = len(runes)
+	var chunks []string
+	if useHTML {
+		// Menggunakan Smart HTML Splitter
+		chunks = h.splitHTMLChunks(text, 4000)
+	} else {
+		// Pemotongan dasar jika tidak memakai format HTML
+		runes := []rune(text)
+		for i := 0; i < len(runes); i += 4000 {
+			end := i + 4000
+			if end > len(runes) {
+				end = len(runes)
+			}
+			chunks = append(chunks, string(runes[i:end]))
 		}
-		chunk := string(runes[i:end])
+	}
 
+	for i, chunk := range chunks {
 		req := SendMessageReq{
 			ChatID:           chatID,
 			MessageThreadID:  threadID,
@@ -502,7 +690,8 @@ func (h *Handler) sendMsg(chatID int64, threadID int, replyToID int, text string
 			req.ParseMode = "HTML"
 		}
 
-		if end == len(runes) && markup != nil {
+		// Tombol/markup hanya dipasang di pesan potongan paling akhir
+		if i == len(chunks)-1 && markup != nil {
 			req.ReplyMarkup = markup
 		}
 
@@ -517,6 +706,7 @@ func (h *Handler) sendMsg(chatID int64, threadID int, replyToID int, text string
 			log.Printf("Failed to send message chunk to chat %d: %v\n", chatID, err)
 		}
 
+		// Reply ID hanya di-set pada potongan pertama, potongan lanjutannya tidak perlu mereply ulang
 		replyToID = 0
 	}
 }
@@ -534,4 +724,118 @@ func (h *Handler) stripHTML(text string) string {
 	text = strings.ReplaceAll(text, "&lt;", "<")
 	text = strings.ReplaceAll(text, "&gt;", ">")
 	return text
+}
+
+func (h *Handler) editMsg(chatID int64, msgID int, text string, useHTML bool, markup interface{}) {
+	if useHTML {
+		text = formatToHTML(text)
+	}
+	req := EditMessageTextReq{
+		ChatID:      chatID,
+		MessageID:   msgID,
+		Text:        text,
+	}
+	if useHTML {
+		req.ParseMode = "HTML"
+	}
+	if markup != nil {
+		req.ReplyMarkup = markup
+	}
+	
+	err := h.tg.EditMessageText(req)
+	if err != nil && useHTML {
+		log.Printf("Failed to edit HTML, falling back to plain text for chat %d: %v\n", chatID, err)
+		req.ParseMode = ""
+		rawRunes := []rune(h.stripHTML(text))
+		req.Text = string(rawRunes)
+		_ = h.tg.EditMessageText(req)
+	} else if err != nil {
+		log.Printf("Failed to edit message to chat %d: %v\n", chatID, err)
+	}
+}
+
+func (h *Handler) sendHelpMenu(chatID int64, threadID int, msgID int, lang string) {
+	msg := h.i18n.Get(lang, "help_message")
+	btnBack := "🔙 Back"
+	if lang == "id" {
+		btnBack = "🔙 Kembali"
+	}
+
+	markup := InlineKeyboardMarkup{
+		InlineKeyboard: [][]InlineKeyboardButton{
+			{{Text: btnBack, CallbackData: "action_back"}},
+		},
+	}
+
+	if msgID == 0 {
+		h.sendMsg(chatID, threadID, 0, msg, true, markup)
+	} else {
+		h.editMsg(chatID, msgID, msg, true, markup)
+	}
+}
+
+func (h *Handler) splitHTMLChunks(text string, limit int) []string {
+	var chunks []string
+	runes := []rune(text)
+
+	for len(runes) > 0 {
+		if len(runes) <= limit {
+			chunks = append(chunks, string(runes))
+			break
+		}
+
+		// Cari batas potong optimal (spasi atau baris baru) agar tidak memotong di tengah kata
+		splitIdx := limit
+		for i := limit; i > limit-1000 && i > 0; i-- {
+			if runes[i] == '\n' || runes[i] == ' ' {
+				splitIdx = i
+				break
+			}
+		}
+
+		chunk := string(runes[:splitIdx])
+		openTags := h.getOpenHTMLTags(chunk)
+
+		// Tutup paksa tag yang masih terbuka di akhir chunk ini (dari urutan terakhir ke pertama)
+		for i := len(openTags) - 1; i >= 0; i-- {
+			chunk += "</" + openTags[i] + ">"
+		}
+		chunks = append(chunks, chunk)
+
+		// Buka kembali tag tersebut di awal chunk berikutnya
+		nextPrefix := ""
+		for _, tag := range openTags {
+			nextPrefix += "<" + tag + ">"
+		}
+
+		// Lanjutkan sisa teks yang belum dipotong
+		runes = append([]rune(nextPrefix), runes[splitIdx:]...)
+	}
+
+	return chunks
+}
+
+func (h *Handler) getOpenHTMLTags(text string) []string {
+	var stack []string
+	re := regexp.MustCompile(`</?(b|i|u|code|pre)>`)
+	matches := re.FindAllStringSubmatch(text, -1)
+	for _, match := range matches {
+		tag := match[1]
+		if strings.HasPrefix(match[0], "</") {
+			// Hapus tag dari tumpukan jika sudah ditutup
+			if len(stack) > 0 && stack[len(stack)-1] == tag {
+				stack = stack[:len(stack)-1]
+			} else {
+				for i := len(stack) - 1; i >= 0; i-- {
+					if stack[i] == tag {
+						stack = append(stack[:i], stack[i+1:]...)
+						break
+					}
+				}
+			}
+		} else {
+			stack = append(stack, tag)
+		}
+	}
+	return stack
 }
