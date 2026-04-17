@@ -7,14 +7,10 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"sync"
 	"time"
 )
 
 type Client struct {
-	apiKeys    []string
-	keyIndex   int
-	mu         sync.Mutex
 	httpClient *http.Client
 }
 
@@ -38,31 +34,17 @@ type Choice struct {
 	Message Message `json:"message"`
 }
 
-func New(apiKeys []string) *Client {
-	if len(apiKeys) == 0 {
-		log.Fatalf("No Groq API keys provided")
-	}
+func New() *Client {
 	return &Client{
-		apiKeys:    apiKeys,
-		keyIndex:   0,
 		httpClient: &http.Client{Timeout: 60 * time.Second},
 	}
 }
 
-func (c *Client) getKey() string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.apiKeys[c.keyIndex%len(c.apiKeys)]
-}
+func (c *Client) GenerateChat(apiKeys []string, systemPrompt string, history []Message) (string, error) {
+	if len(apiKeys) == 0 {
+		return "", fmt.Errorf("no api keys provided by user")
+	}
 
-func (c *Client) rotateKey() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.keyIndex++
-	log.Printf("Rotated to API key index %d due to rate limit\n", c.keyIndex%len(c.apiKeys))
-}
-
-func (c *Client) GenerateChat(systemPrompt string, history []Message) (string, error) {
 	url := "https://api.groq.com/openai/v1/chat/completions"
 
 	var finalHistory []Message
@@ -87,13 +69,13 @@ func (c *Client) GenerateChat(systemPrompt string, history []Message) (string, e
 		return "", err
 	}
 
-	maxRetries := len(c.apiKeys) * 3
+	maxRetries := len(apiKeys) * 3
 	baseDelay := 2 * time.Second
 	var lastErr error
 	var bodyBytes []byte
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
-		currentKey := c.getKey()
+		currentKey := apiKeys[attempt%len(apiKeys)]
 
 		req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
 		if err != nil {
@@ -127,8 +109,7 @@ func (c *Client) GenerateChat(systemPrompt string, history []Message) (string, e
 
 		if resp.StatusCode == http.StatusTooManyRequests {
 			lastErr = fmt.Errorf("Groq API returned status %d: %s", resp.StatusCode, string(bodyBytes))
-			log.Printf("Rate limit hit. Initiating key rotation...\n")
-			c.rotateKey()
+			log.Printf("Rate limit hit. Rotating key statically...\n")
 			time.Sleep(baseDelay)
 			continue
 		}

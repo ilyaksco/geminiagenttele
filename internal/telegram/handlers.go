@@ -2,33 +2,40 @@ package telegram
 
 import (
 	"fmt"
+	"gemini-agent/internal/crypto"
 	"gemini-agent/internal/database"
 	"gemini-agent/internal/groq"
 	"gemini-agent/internal/i18n"
 	"log"
 	"regexp"
 	"strings"
+	"sync"
 )
 
 type Handler struct {
-	tg        *Client
-	db        *database.DB
-	llm       *groq.Client
-	i18n      *i18n.I18n
-	BotUser   *User
-	IsManager bool
-	OnNewBot  func(botID int64, token string)
+	tg            *Client
+	db            *database.DB
+	llm           *groq.Client
+	i18n          *i18n.I18n
+	BotUser       *User
+	EncryptionKey string
+	IsManager     bool
+	OnNewBot      func(botID int64, token string)
+	userStates    map[int64]string
+	stateMu       sync.RWMutex
 }
 
-func NewHandler(tg *Client, db *database.DB, llm *groq.Client, i18n *i18n.I18n, botUser *User, isManager bool, onNewBot func(botID int64, token string)) *Handler {
+func NewHandler(tg *Client, db *database.DB, llm *groq.Client, i18n *i18n.I18n, botUser *User, encryptionKey string, isManager bool, onNewBot func(botID int64, token string)) *Handler {
 	return &Handler{
-		tg:        tg,
-		db:        db,
-		llm:       llm,
-		i18n:      i18n,
-		BotUser:   botUser,
-		IsManager: isManager,
-		OnNewBot:  onNewBot,
+		tg:            tg,
+		db:            db,
+		llm:           llm,
+		i18n:          i18n,
+		BotUser:       botUser,
+		EncryptionKey: encryptionKey,
+		IsManager:     isManager,
+		OnNewBot:      onNewBot,
+		userStates:    make(map[int64]string),
 	}
 }
 
@@ -67,7 +74,7 @@ func (h *Handler) handleMessage(m *Message) {
 	if m.ForumTopicCreated != nil {
 		if !h.IsManager {
 			msg := h.i18n.Get(lang, "welcome")
-			h.sendMessage(m.Chat.ID, m.MessageThreadID, 0, "Topic initialized. "+msg, true)
+			h.sendMsg(m.Chat.ID, m.MessageThreadID, 0, "Topic initialized. "+msg, true, nil)
 		}
 		return
 	}
@@ -77,16 +84,51 @@ func (h *Handler) handleMessage(m *Message) {
 	}
 
 	if h.IsManager {
+		h.stateMu.RLock()
+		state := h.userStates[m.From.ID]
+		h.stateMu.RUnlock()
+
+		if state == "awaiting_api_key" {
+			rawKeys := strings.ReplaceAll(m.Text, " ", "")
+			encrypted, err := crypto.Encrypt(rawKeys, h.EncryptionKey)
+			if err != nil {
+				h.sendMsg(m.Chat.ID, m.MessageThreadID, m.MessageID, h.i18n.Get(lang, "error_occurred"), true, nil)
+			} else {
+				h.db.SetUserAPIKeys(m.From.ID, encrypted)
+				h.sendMsg(m.Chat.ID, m.MessageThreadID, m.MessageID, h.i18n.Get(lang, "api_saved"), true, nil)
+			}
+
+			h.stateMu.Lock()
+			delete(h.userStates, m.From.ID)
+			h.stateMu.Unlock()
+			return
+		}
+
+		if strings.HasPrefix(m.Text, "/start") {
+			msg := h.i18n.Get(lang, "welcome")
+			h.sendMainMenu(m.Chat.ID, m.MessageThreadID, lang, msg)
+			return
+		}
+
 		if strings.HasPrefix(m.Text, "/link") {
-			link := fmt.Sprintf("https://t.me/newbot/%s/my_new_bot", h.BotUser.Username)
-			h.sendMessage(m.Chat.ID, m.MessageThreadID, m.MessageID, "Click here to create your own AI bot:\n"+link, false)
+			h.handleCreateBotFlow(m.Chat.ID, m.MessageThreadID, lang)
+			return
+		}
+
+		if strings.HasPrefix(m.Text, "/mybots") {
+			h.sendMyBots(m.From.ID, m.Chat.ID, m.MessageThreadID, lang)
+			return
+		}
+
+		if strings.HasPrefix(m.Text, "/setapi") {
+			h.handleSetApiFlow(m.From.ID, m.Chat.ID, m.MessageThreadID, lang)
 			return
 		}
 
 		if strings.HasPrefix(m.Text, "/setprompt") {
 			parts := strings.SplitN(m.Text, " ", 3)
 			if len(parts) < 3 {
-				h.sendMessage(m.Chat.ID, m.MessageThreadID, m.MessageID, "Usage: /setprompt @bot_username <prompt_text>", false)
+				h.sendMsg(m.Chat.ID, m.MessageThreadID, m.MessageID, "Usage: `/setprompt @bot_username <prompt_text>`", true, nil)
 				return
 			}
 
@@ -95,16 +137,16 @@ func (h *Handler) handleMessage(m *Message) {
 
 			success := h.db.SetBotPromptByOwner(m.From.ID, targetUsername, promptText)
 			if success {
-				h.sendMessage(m.Chat.ID, m.MessageThreadID, m.MessageID, fmt.Sprintf("✅ Prompt updated successfully for @%s", targetUsername), false)
+				h.sendMsg(m.Chat.ID, m.MessageThreadID, m.MessageID, fmt.Sprintf("✅ Prompt updated successfully for @%s", targetUsername), true, nil)
 			} else {
-				h.sendMessage(m.Chat.ID, m.MessageThreadID, m.MessageID, fmt.Sprintf("❌ Failed! Either @%s does not exist, or you are not the creator of that bot.", targetUsername), false)
+				h.sendMsg(m.Chat.ID, m.MessageThreadID, m.MessageID, fmt.Sprintf("❌ Failed! Either @%s does not exist, or you are not the creator of that bot.", targetUsername), true, nil)
 			}
 			return
 		}
 
-		if strings.HasPrefix(m.Text, "/start") || strings.HasPrefix(m.Text, "/help") {
-			msg := "🤖 Welcome to AI Bot Factory!\n\nThis bot allows you to create your own personalized AI Assistant. Everyone can create one!\n\nCommands:\n/link - Create a new AI bot\n/setprompt @your_bot <text> - Set the AI persona\n/lang - Change language"
-			h.sendMessage(m.Chat.ID, m.MessageThreadID, m.MessageID, msg, false)
+		if strings.HasPrefix(m.Text, "/help") {
+			msg := h.i18n.Get(lang, "help_message")
+			h.sendMsg(m.Chat.ID, m.MessageThreadID, m.MessageID, msg, true, nil)
 			return
 		}
 
@@ -113,7 +155,7 @@ func (h *Handler) handleMessage(m *Message) {
 			return
 		}
 
-		h.sendMessage(m.Chat.ID, m.MessageThreadID, m.MessageID, "⚠️ I am just the Bot Factory Manager without AI capabilities. Use /link to create your own AI bot, or /setprompt to manage your bot's persona.", false)
+		h.sendMsg(m.Chat.ID, m.MessageThreadID, m.MessageID, "⚠️ Use /start to open the menu.", true, nil)
 		return
 	}
 
@@ -151,18 +193,7 @@ func (h *Handler) handleMessage(m *Message) {
 
 	if strings.HasPrefix(m.Text, "/start") {
 		msg := h.i18n.Get(lang, "welcome")
-		h.sendMessage(m.Chat.ID, m.MessageThreadID, m.MessageID, msg, true)
-		return
-	}
-
-	if strings.HasPrefix(m.Text, "/help") {
-		msg := h.i18n.Get(lang, "help_message")
-		h.sendMessage(m.Chat.ID, m.MessageThreadID, m.MessageID, msg, true)
-		return
-	}
-
-	if strings.HasPrefix(m.Text, "/lang") {
-		h.sendLangMenu(m.Chat.ID, m.MessageThreadID, lang)
+		h.sendMsg(m.Chat.ID, m.MessageThreadID, m.MessageID, msg, true, nil)
 		return
 	}
 
@@ -171,6 +202,26 @@ func (h *Handler) handleMessage(m *Message) {
 		MessageThreadID: m.MessageThreadID,
 		Action:          "typing",
 	})
+
+	ownerID := h.db.GetBotOwner(h.BotUser.ID)
+	encryptedKeys := h.db.GetUserAPIKeys(ownerID)
+	decryptedKeys := ""
+	if encryptedKeys != "" {
+		decryptedKeys, _ = crypto.Decrypt(encryptedKeys, h.EncryptionKey)
+	}
+
+	apiKeys := strings.Split(decryptedKeys, ",")
+	validKeys := []string{}
+	for _, k := range apiKeys {
+		if k != "" {
+			validKeys = append(validKeys, k)
+		}
+	}
+
+	if len(validKeys) == 0 {
+		h.sendMsg(m.Chat.ID, m.MessageThreadID, m.MessageID, h.i18n.Get(lang, "missing_api_key"), true, nil)
+		return
+	}
 
 	promptText := m.Text
 	if m.ReplyToMessage != nil && m.ReplyToMessage.Text != "" {
@@ -186,12 +237,9 @@ func (h *Handler) handleMessage(m *Message) {
 
 	h.db.SaveMessage(h.BotUser.ID, m.Chat.ID, m.MessageThreadID, "user", promptText)
 
-	systemPrompt := ""
-	if !h.IsManager {
-		systemPrompt = h.db.GetBotPrompt(h.BotUser.ID)
-	}
+	systemPrompt := h.db.GetBotPrompt(h.BotUser.ID)
 
-	replyText, err := h.llm.GenerateChat(systemPrompt, llmHistory)
+	replyText, err := h.llm.GenerateChat(validKeys, systemPrompt, llmHistory)
 	if err != nil {
 		log.Printf("Error from Groq: %v\n", err)
 		replyText = h.i18n.Get(lang, "error_occurred")
@@ -199,7 +247,7 @@ func (h *Handler) handleMessage(m *Message) {
 		h.db.SaveMessage(h.BotUser.ID, m.Chat.ID, m.MessageThreadID, "assistant", replyText)
 	}
 
-	h.sendMessage(m.Chat.ID, m.MessageThreadID, m.MessageID, replyText, true)
+	h.sendMsg(m.Chat.ID, m.MessageThreadID, m.MessageID, replyText, true, nil)
 }
 
 func buildGroqHistory(rawHistory []database.ChatMessage, newText string) []groq.Message {
@@ -224,22 +272,67 @@ func buildGroqHistory(rawHistory []database.ChatMessage, newText string) []groq.
 	return validHistory
 }
 
+// State-Aware HTML Parser: Anti-Crash Mechanism
 func formatToHTML(text string) string {
+	codeBlocks := make(map[string]string)
+
+	// 1. Karantina Multi-line Code Block
+	reCodeBlock := regexp.MustCompile("(?s)```(.*?)```")
+	text = reCodeBlock.ReplaceAllStringFunc(text, func(m string) string {
+		placeholder := fmt.Sprintf("%%CB%d%%", len(codeBlocks))
+		inner := m[3 : len(m)-3]
+		inner = strings.ReplaceAll(inner, "&", "&amp;")
+		inner = strings.ReplaceAll(inner, "<", "&lt;")
+		inner = strings.ReplaceAll(inner, ">", "&gt;")
+		codeBlocks[placeholder] = "<pre><code>" + inner + "</code></pre>"
+		return placeholder
+	})
+
+	// 2. Karantina Inline Code Block
+	reInlineCode := regexp.MustCompile("`([^`\n]+)`")
+	text = reInlineCode.ReplaceAllStringFunc(text, func(m string) string {
+		placeholder := fmt.Sprintf("%%IC%d%%", len(codeBlocks))
+		inner := m[1 : len(m)-1]
+		inner = strings.ReplaceAll(inner, "&", "&amp;")
+		inner = strings.ReplaceAll(inner, "<", "&lt;")
+		inner = strings.ReplaceAll(inner, ">", "&gt;")
+		codeBlocks[placeholder] = "<code>" + inner + "</code>"
+		return placeholder
+	})
+
+	// 3. Sanitasi karakter HTML standar untuk keamanan Telegram
 	text = strings.ReplaceAll(text, "&", "&amp;")
 	text = strings.ReplaceAll(text, "<", "&lt;")
 	text = strings.ReplaceAll(text, ">", "&gt;")
 
-	reCodeBlock := regexp.MustCompile("(?s)```(.*?)```")
-	text = reCodeBlock.ReplaceAllString(text, "<pre><code>$1</code></pre>")
+	// 4. Lindungi Bullet Points (titik list) agar tidak salah diubah jadi Italic
+	reBullet := regexp.MustCompile(`(?m)^(\s*)\* `)
+	text = reBullet.ReplaceAllString(text, "$1%%BULLET%% ")
 
-	reInlineCode := regexp.MustCompile("`([^`]+)`")
-	text = reInlineCode.ReplaceAllString(text, "<code>$1</code>")
+	// 5. Proses Bold & Italic HANYA jika mereka tidak menyeberangi tag HTML buatan kita (< dan >)
+	// Ini menjamin mustahil terjadi tabrakan antara </i> dan </b>
+	reBoldItalic := regexp.MustCompile(`\*\*\*([^<>\n]+?)\*\*\*`)
+	text = reBoldItalic.ReplaceAllString(text, "<b><i>$1</i></b>")
 
-	reBold := regexp.MustCompile(`\*\*(.*?)\*\*`)
+	reBold := regexp.MustCompile(`\*\*([^<>\n]+?)\*\*`)
 	text = reBold.ReplaceAllString(text, "<b>$1</b>")
 
-	reItalic := regexp.MustCompile(`\*([^\*]+)\*`)
+	reItalic := regexp.MustCompile(`\*([^<>\*\n]+?)\*`)
 	text = reItalic.ReplaceAllString(text, "<i>$1</i>")
+
+	reUnderline := regexp.MustCompile(`\_\_([^<>\n]+?)\_\_`)
+	text = reUnderline.ReplaceAllString(text, "<u>$1</u>")
+
+	reItalicUnder := regexp.MustCompile(`\_([^<>\_\n]+?)\_`)
+	text = reItalicUnder.ReplaceAllString(text, "<i>$1</i>")
+
+	// Kembalikan Bullet Points yang dilindungi
+	text = strings.ReplaceAll(text, "%%BULLET%%", "*")
+
+	// Kembalikan semua Code Blocks yang dikarantina
+	for placeholder, htmlCode := range codeBlocks {
+		text = strings.ReplaceAll(text, placeholder, htmlCode)
+	}
 
 	return text
 }
@@ -247,23 +340,143 @@ func formatToHTML(text string) string {
 func (h *Handler) handleCallbackQuery(cq *CallbackQuery) {
 	h.tg.AnswerCallbackQuery(cq.ID)
 
+	lang := h.db.GetUserLang(cq.From.ID)
 	parts := strings.Split(cq.Data, "_")
+
 	if len(parts) == 2 && parts[0] == "lang" {
 		newLang := parts[1]
 		h.db.SetUserLang(cq.From.ID, newLang)
-
 		if cq.Message != nil {
-			successMsg := h.i18n.Get(newLang, "lang_changed")
 			h.tg.EditMessageText(EditMessageTextReq{
 				ChatID:    cq.Message.Chat.ID,
 				MessageID: cq.Message.MessageID,
-				Text:      successMsg,
+				Text:      h.i18n.Get(newLang, "lang_changed"),
 			})
+		}
+		return
+	}
+
+	if parts[0] == "action" {
+		switch parts[1] {
+		case "create":
+			h.handleCreateBotFlow(cq.Message.Chat.ID, cq.Message.MessageThreadID, lang)
+		case "mybots":
+			h.sendMyBots(cq.From.ID, cq.Message.Chat.ID, cq.Message.MessageThreadID, lang)
+		case "help":
+			h.sendMsg(cq.Message.Chat.ID, cq.Message.MessageThreadID, 0, h.i18n.Get(lang, "help_message"), true, nil)
+		case "setapi":
+			h.handleSetApiFlow(cq.From.ID, cq.Message.Chat.ID, cq.Message.MessageThreadID, lang)
+		case "cancelapi":
+			h.stateMu.Lock()
+			delete(h.userStates, cq.From.ID)
+			h.stateMu.Unlock()
+			h.sendMsg(cq.Message.Chat.ID, cq.Message.MessageThreadID, 0, h.i18n.Get(lang, "action_canceled"), true, nil)
 		}
 	}
 }
 
-func (h *Handler) sendMessage(chatID int64, threadID int, replyToID int, text string, useHTML bool) {
+func (h *Handler) handleCreateBotFlow(chatID int64, threadID int, lang string) {
+	link := fmt.Sprintf("https://t.me/newbot/%s/my_new_bot", h.BotUser.Username)
+	btnTxt := h.i18n.Get(lang, "btn_go_create")
+
+	markup := InlineKeyboardMarkup{
+		InlineKeyboard: [][]InlineKeyboardButton{
+			{{Text: btnTxt, URL: link}},
+		},
+	}
+	h.sendMsg(chatID, threadID, 0, h.i18n.Get(lang, "create_bot_instruction"), true, markup)
+}
+
+func (h *Handler) handleSetApiFlow(userID int64, chatID int64, threadID int, lang string) {
+	encryptedKeys := h.db.GetUserAPIKeys(userID)
+	currentKeys := "None"
+	if encryptedKeys != "" {
+		decrypted, err := crypto.Decrypt(encryptedKeys, h.EncryptionKey)
+		if err == nil && decrypted != "" {
+			currentKeys = decrypted
+		}
+	}
+
+	text := fmt.Sprintf(h.i18n.Get(lang, "set_api_instruction"), currentKeys)
+
+	btnCancel := h.i18n.Get(lang, "btn_cancel")
+	markup := InlineKeyboardMarkup{
+		InlineKeyboard: [][]InlineKeyboardButton{
+			{{Text: btnCancel, CallbackData: "action_cancelapi"}},
+		},
+	}
+
+	h.stateMu.Lock()
+	h.userStates[userID] = "awaiting_api_key"
+	h.stateMu.Unlock()
+
+	h.sendMsg(chatID, threadID, 0, text, true, markup)
+}
+
+func (h *Handler) sendMyBots(userID int64, chatID int64, threadID int, lang string) {
+	bots := h.db.GetBotsByOwner(userID)
+	if len(bots) == 0 {
+		h.sendMsg(chatID, threadID, 0, h.i18n.Get(lang, "no_bots_msg"), true, nil)
+		return
+	}
+
+	msg := h.i18n.Get(lang, "my_bots_msg")
+	var buttons [][]InlineKeyboardButton
+
+	for _, bot := range bots {
+		botUrl := "https://t.me/" + bot.Username
+		buttons = append(buttons, []InlineKeyboardButton{
+			{Text: "@" + bot.Username, URL: botUrl},
+		})
+	}
+
+	markup := InlineKeyboardMarkup{
+		InlineKeyboard: buttons,
+	}
+
+	h.sendMsg(chatID, threadID, 0, msg, true, markup)
+}
+
+func (h *Handler) sendMainMenu(chatID int64, threadID int, lang string, text string) {
+	btnCreate := h.i18n.Get(lang, "btn_create")
+	btnMyBots := h.i18n.Get(lang, "btn_mybots")
+	btnHelp := h.i18n.Get(lang, "btn_help")
+	btnSetApi := h.i18n.Get(lang, "btn_setapi")
+
+	markup := InlineKeyboardMarkup{
+		InlineKeyboard: [][]InlineKeyboardButton{
+			{
+				{Text: btnCreate, CallbackData: "action_create"},
+				{Text: btnSetApi, CallbackData: "action_setapi"},
+			},
+			{
+				{Text: btnMyBots, CallbackData: "action_mybots"},
+				{Text: btnHelp, CallbackData: "action_help"},
+			},
+		},
+	}
+
+	h.sendMsg(chatID, threadID, 0, text, true, markup)
+}
+
+func (h *Handler) sendLangMenu(chatID int64, threadID int, lang string) {
+	text := h.i18n.Get(lang, "choose_lang")
+	btnEn := h.i18n.Get(lang, "btn_en")
+	btnId := h.i18n.Get(lang, "btn_id")
+
+	markup := InlineKeyboardMarkup{
+		InlineKeyboard: [][]InlineKeyboardButton{
+			{
+				{Text: btnEn, CallbackData: "lang_en"},
+				{Text: btnId, CallbackData: "lang_id"},
+			},
+		},
+	}
+
+	h.sendMsg(chatID, threadID, 0, text, true, markup)
+}
+
+func (h *Handler) sendMsg(chatID int64, threadID int, replyToID int, text string, useHTML bool, markup interface{}) {
 	if useHTML {
 		text = formatToHTML(text)
 	}
@@ -287,6 +500,10 @@ func (h *Handler) sendMessage(chatID int64, threadID int, replyToID int, text st
 
 		if useHTML {
 			req.ParseMode = "HTML"
+		}
+
+		if end == len(runes) && markup != nil {
+			req.ReplyMarkup = markup
 		}
 
 		err := h.tg.SendMessage(req)
@@ -317,30 +534,4 @@ func (h *Handler) stripHTML(text string) string {
 	text = strings.ReplaceAll(text, "&lt;", "<")
 	text = strings.ReplaceAll(text, "&gt;", ">")
 	return text
-}
-
-func (h *Handler) sendLangMenu(chatID int64, threadID int, lang string) {
-	text := h.i18n.Get(lang, "choose_lang")
-	btnEn := h.i18n.Get(lang, "btn_en")
-	btnId := h.i18n.Get(lang, "btn_id")
-
-	markup := InlineKeyboardMarkup{
-		InlineKeyboard: [][]InlineKeyboardButton{
-			{
-				{Text: btnEn, CallbackData: "lang_en"},
-				{Text: btnId, CallbackData: "lang_id"},
-			},
-		},
-	}
-
-	req := SendMessageReq{
-		ChatID:          chatID,
-		MessageThreadID: threadID,
-		Text:            text,
-		ReplyMarkup:     markup,
-	}
-	err := h.tg.SendMessage(req)
-	if err != nil {
-		log.Printf("Failed to send language menu to chat %d: %v\n", chatID, err)
-	}
 }

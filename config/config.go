@@ -8,7 +8,7 @@ import (
 
 type Config struct {
 	TelegramToken string
-	GroqAPIKeys   []string
+	EncryptionKey string
 	DatabaseURL   string
 }
 
@@ -29,18 +29,18 @@ func Load() *Config {
 		}
 	}
 
-	rawKeys := strings.Split(os.Getenv("GROQ_API_KEYS"), ",")
-	var apiKeys []string
-	for _, k := range rawKeys {
-		cleaned := strings.TrimSpace(k)
-		if cleaned != "" {
-			apiKeys = append(apiKeys, cleaned)
-		}
+	keyBytes := []byte(os.Getenv("ENCRYPTION_KEY"))
+	if len(keyBytes) < 32 {
+		padded := make([]byte, 32)
+		copy(padded, keyBytes)
+		keyBytes = padded
+	} else if len(keyBytes) > 32 {
+		keyBytes = keyBytes[:32]
 	}
 
 	return &Config{
 		TelegramToken: os.Getenv("TELEGRAM_TOKEN"),
-		GroqAPIKeys:   apiKeys,
+		EncryptionKey: string(keyBytes),
 		DatabaseURL:   os.Getenv("DATABASE_URL"),
 	}
 }

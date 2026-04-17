@@ -37,7 +37,8 @@ func New(dbURL string) *DB {
 	queries := []string{
 		`CREATE TABLE IF NOT EXISTS users (
 			id INTEGER PRIMARY KEY,
-			language TEXT NOT NULL DEFAULT 'en'
+			language TEXT NOT NULL DEFAULT 'en',
+			encrypted_api_keys TEXT DEFAULT ''
 		);`,
 		`CREATE TABLE IF NOT EXISTS chat_history (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -59,7 +60,7 @@ func New(dbURL string) *DB {
 
 	for _, q := range queries {
 		_, err = conn.Exec(q)
-		if err != nil && err.Error() != "table chat_history already exists" && err.Error() != "table managed_bots already exists" {
+		if err != nil && err.Error() != "table chat_history already exists" && err.Error() != "table managed_bots already exists" && err.Error() != "table users already exists" {
 			log.Printf("Init query skipped/handled: %v\n", err)
 		}
 	}
@@ -67,6 +68,7 @@ func New(dbURL string) *DB {
 	_, _ = conn.Exec(`ALTER TABLE managed_bots ADD COLUMN username TEXT DEFAULT '';`)
 	_, _ = conn.Exec(`ALTER TABLE chat_history ADD COLUMN bot_id INTEGER DEFAULT 0;`)
 	_, _ = conn.Exec(`ALTER TABLE managed_bots ADD COLUMN owner_id INTEGER DEFAULT 0;`)
+	_, _ = conn.Exec(`ALTER TABLE users ADD COLUMN encrypted_api_keys TEXT DEFAULT '';`)
 
 	log.Println("Database connection established and tables verified")
 	return &DB{Conn: conn}
@@ -93,6 +95,27 @@ func (db *DB) GetUserLang(userID int64) string {
 		return "en"
 	}
 	return lang
+}
+
+func (db *DB) SetUserAPIKeys(userID int64, encryptedKeys string) {
+	query := `INSERT INTO users (id, encrypted_api_keys) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET encrypted_api_keys = ?;`
+	_, err := db.Conn.Exec(query, userID, encryptedKeys, encryptedKeys)
+	if err != nil {
+		log.Printf("Failed to save user API keys: %v\n", err)
+	}
+}
+
+func (db *DB) GetUserAPIKeys(userID int64) string {
+	var keys sql.NullString
+	query := `SELECT encrypted_api_keys FROM users WHERE id = ?;`
+	err := db.Conn.QueryRow(query, userID).Scan(&keys)
+	if err != nil {
+		return ""
+	}
+	if keys.Valid {
+		return keys.String
+	}
+	return ""
 }
 
 func (db *DB) SaveMessage(botID int64, chatID int64, threadID int, role string, content string) {
@@ -158,6 +181,36 @@ func (db *DB) GetManagedBots() []ManagedBot {
 	return bots
 }
 
+func (db *DB) GetBotsByOwner(ownerID int64) []ManagedBot {
+	query := `SELECT bot_id, username FROM managed_bots WHERE owner_id = ?;`
+	rows, err := db.Conn.Query(query, ownerID)
+	if err != nil {
+		log.Printf("Failed to fetch user bots: %v\n", err)
+		return nil
+	}
+	defer rows.Close()
+
+	var bots []ManagedBot
+	for rows.Next() {
+		var bot ManagedBot
+		if err := rows.Scan(&bot.BotID, &bot.Username); err != nil {
+			continue
+		}
+		bots = append(bots, bot)
+	}
+	return bots
+}
+
+func (db *DB) GetBotOwner(botID int64) int64 {
+	var ownerID int64
+	query := `SELECT owner_id FROM managed_bots WHERE bot_id = ?;`
+	err := db.Conn.QueryRow(query, botID).Scan(&ownerID)
+	if err != nil {
+		return 0
+	}
+	return ownerID
+}
+
 func (db *DB) SetBotPromptByOwner(ownerID int64, username string, prompt string) bool {
 	query := `UPDATE managed_bots SET system_prompt = ? WHERE LOWER(username) = LOWER(?) AND owner_id = ?;`
 	res, err := db.Conn.Exec(query, prompt, username, ownerID)
@@ -174,9 +227,6 @@ func (db *DB) GetBotPrompt(botID int64) string {
 	query := `SELECT system_prompt FROM managed_bots WHERE bot_id = ?;`
 	err := db.Conn.QueryRow(query, botID).Scan(&prompt)
 	if err != nil {
-		if err != sql.ErrNoRows {
-			log.Printf("Error getting bot prompt: %v\n", err)
-		}
 		return ""
 	}
 	if prompt.Valid {

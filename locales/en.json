@@ -1,9 +1,22 @@
 {
-  "welcome": "Welcome! I am your Gemini Agent. Use /lang to change language.",
+  "welcome": "🤖 **Welcome to AI Bot Factory!**\n\nI am your Bot Manager. Use the buttons below to create and manage your personalized AI clones.",
   "lang_changed": "Language changed successfully.",
   "choose_lang": "Choose your language:",
   "error_occurred": "An error occurred while processing your request.",
-  "help_message": "Send me any message, and I will reply using Gemini AI.\n\nCommands:\n/start - Start bot\n/help - Show this message\n/lang - Change language",
+  "help_message": "**Bot Factory Help:**\n\n/start - Open Main Menu\n/link - Create a new AI bot\n/mybots - List all your bots\n/setapi - Set Groq API Keys\n/setprompt `@bot` <text> - Set bot persona\n/lang - Change language",
   "btn_en": "English",
-  "btn_id": "Indonesian"
+  "btn_id": "Indonesian",
+  "btn_create": "➕ Create Bot",
+  "btn_mybots": "🤖 My Bots",
+  "btn_help": "❓ Help",
+  "btn_setapi": "🔑 Set API Key",
+  "btn_cancel": "❌ Cancel",
+  "btn_go_create": "🚀 Open Bot Creator",
+  "my_bots_msg": "**Your Managed Bots:**\nClick the buttons below to open your AI clones:",
+  "no_bots_msg": "You don't have any bots yet. Click **Create Bot**.",
+  "set_api_instruction": "**API Key Setup**\n\nYour current API keys: \n`%s`\n\n**Please reply by typing your new Groq API keys directly.**\nYou can use multiple keys by separating them with commas (e.g., `key1,key2`).\n\nPress **Cancel** to abort.",
+  "api_saved": "✅ Your API keys have been securely encrypted and saved to the database.",
+  "action_canceled": "Action canceled.",
+  "missing_api_key": "⚠️ The owner of this bot hasn't set up their Groq API Keys yet. Please contact the owner.",
+  "create_bot_instruction": "Click the button below to start creating your managed bot:"
 }

@@ -21,16 +21,16 @@ var (
 )
 
 func main() {
-	log.Println("Starting Public Bot Factory Backend with Groq API Rotation...")
+	log.Println("Starting Public Bot Factory Backend with Secure BYOK...")
 
 	cfg = config.Load()
-	if cfg.TelegramToken == "" || len(cfg.GroqAPIKeys) == 0 {
-		log.Fatalf("Missing critical environment variables (Token or API Keys)")
+	if cfg.TelegramToken == "" || cfg.EncryptionKey == "" {
+		log.Fatalf("Missing critical environment variables (Token or Encryption Key)")
 	}
 
 	i18nSys = i18n.New()
 	db = database.New(cfg.DatabaseURL)
-	groqClient = groq.New(cfg.GroqAPIKeys)
+	groqClient = groq.New()
 
 	startBotInstance(cfg.TelegramToken, true)
 
@@ -60,7 +60,7 @@ func startBotInstance(token string, isManager bool) {
 
 		role := "Managed Clone (AI Active)"
 		if isManager {
-			role = "Manager Bot (Lobotomized)"
+			role = "Manager Bot (UI Active)"
 		}
 		log.Printf("[%s] Authorized successfully as @%s (ID: %d)\n", role, botUser.Username, botUser.ID)
 
@@ -69,7 +69,7 @@ func startBotInstance(token string, isManager bool) {
 			startBotInstance(newToken, false)
 		}
 
-		handler := telegram.NewHandler(tgClient, db, groqClient, i18nSys, botUser, isManager, onNewBotSpawned)
+		handler := telegram.NewHandler(tgClient, db, groqClient, i18nSys, botUser, cfg.EncryptionKey, isManager, onNewBotSpawned)
 
 		offset := 0
 		for {

@@ -1,9 +1,22 @@
 {
-  "welcome": "Selamat datang! Saya adalah Agen Gemini Anda. Gunakan /lang untuk mengganti bahasa.",
+  "welcome": "🤖 **Selamat datang di AI Bot Factory!**\n\nSaya adalah Manajer Bot Anda. Gunakan tombol di bawah untuk membuat dan mengelola kloningan AI Anda.",
   "lang_changed": "Bahasa berhasil diubah.",
   "choose_lang": "Pilih bahasa Anda:",
   "error_occurred": "Terjadi kesalahan saat memproses permintaan Anda.",
-  "help_message": "Kirimkan pesan apa saja, dan saya akan membalas menggunakan AI Gemini.\n\nPerintah:\n/start - Memulai bot\n/help - Menampilkan pesan ini\n/lang - Mengganti bahasa",
+  "help_message": "**Bantuan Bot Factory:**\n\n/start - Buka Menu Utama\n/link - Buat bot AI baru\n/mybots - Lihat daftar bot Anda\n/setapi - Simpan API Key Groq Anda\n/setprompt `@bot` <teks> - Atur sifat bot\n/lang - Ubah bahasa",
   "btn_en": "Inggris",
-  "btn_id": "Indonesia"
+  "btn_id": "Indonesia",
+  "btn_create": "➕ Buat Bot",
+  "btn_mybots": "🤖 Bot Saya",
+  "btn_help": "❓ Bantuan",
+  "btn_setapi": "🔑 Setel API Key",
+  "btn_cancel": "❌ Batal",
+  "btn_go_create": "🚀 Buka Pembuat Bot",
+  "my_bots_msg": "**Bot Kloningan Anda:**\nKlik tombol di bawah untuk membuka kloningan AI Anda:",
+  "no_bots_msg": "Anda belum memiliki bot. Klik **Buat Bot**.",
+  "set_api_instruction": "**Pengaturan API Key**\n\nAPI key Anda saat ini: \n`%s`\n\n**Silakan balas dengan mengetikkan API key Groq baru Anda secara langsung.**\nAnda bisa menggunakan lebih dari satu kunci dengan memisahkannya pakai koma (contoh: `kunci1,kunci2`).\n\nTekan **Batal** untuk membatalkan.",
+  "api_saved": "✅ API key Anda telah dienkripsi dengan aman dan disimpan ke database.",
+  "action_canceled": "Aksi dibatalkan.",
+  "missing_api_key": "⚠️ Pemilik bot ini belum mengatur API Key Groq mereka. Silakan hubungi pembuat bot ini.",
+  "create_bot_instruction": "Klik tombol di bawah untuk mulai membuat bot kloningan:"
 }
