@@ -1,0 +1,9 @@
+{
+  "welcome": "Selamat datang! Saya adalah Agen Gemini Anda. Gunakan /lang untuk mengganti bahasa.",
+  "lang_changed": "Bahasa berhasil diubah.",
+  "choose_lang": "Pilih bahasa Anda:",
+  "error_occurred": "Terjadi kesalahan saat memproses permintaan Anda.",
+  "help_message": "Kirimkan pesan apa saja, dan saya akan membalas menggunakan AI Gemini.\n\nPerintah:\n/start - Memulai bot\n/help - Menampilkan pesan ini\n/lang - Mengganti bahasa",
+  "btn_en": "Inggris",
+  "btn_id": "Indonesia"
+}

@@ -1,0 +1,9 @@
+{
+  "welcome": "Welcome! I am your Gemini Agent. Use /lang to change language.",
+  "lang_changed": "Language changed successfully.",
+  "choose_lang": "Choose your language:",
+  "error_occurred": "An error occurred while processing your request.",
+  "help_message": "Send me any message, and I will reply using Gemini AI.\n\nCommands:\n/start - Start bot\n/help - Show this message\n/lang - Change language",
+  "btn_en": "English",
+  "btn_id": "Indonesian"
+}
