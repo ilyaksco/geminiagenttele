@@ -510,7 +510,7 @@ func (h *Handler) handleCallbackQuery(cq *CallbackQuery) {
 }
 
 func (h *Handler) handleCreateBotFlow(chatID int64, threadID int, msgID int, lang string) {
-	link := fmt.Sprintf("https://t.me/newbot/%s/my_new_bot", h.BotUser.Username)
+	link := fmt.Sprintf("https://t.me/newbot/%s/Cloneth_", h.BotUser.Username)
 	btnTxt := h.i18n.Get(lang, "btn_go_create")
 	btnBack := "🔙 Back"
 	if lang == "id" {
