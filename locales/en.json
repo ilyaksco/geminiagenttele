@@ -18,5 +18,10 @@
   "api_saved": "✅ Your API keys have been securely encrypted and saved to the database.",
   "action_canceled": "Action canceled.",
   "missing_api_key": "⚠️ The owner of this bot hasn't set up their Groq API Keys yet. Please contact the owner.",
-  "create_bot_instruction": "Click the button below to start creating your managed bot:"
+  "create_bot_instruction": "Click the button below to start creating your managed bot:",
+
+  "btn_how_to_get_api": "💡 How to get API Key?",
+  "api_tutorial_title": "**How to Get Groq API Key**",
+  "api_tutorial_steps": "Follow these simple steps:\n\n1. Visit the **Groq Console** by clicking the button below.\n2. Login using your Google or GitHub account.\n3. Click the **\"Create API Key\"** button.\n4. Give it a name (e.g., \"My Bot\") and click **Submit**.\n5. **Copy** the key (starts with `gsk_...`).\n6. Come back here and **paste** the key in this chat.",
+  "btn_open_groq": "🌐 Open Groq Console"
 }

@@ -501,6 +501,8 @@ func (h *Handler) handleCallbackQuery(cq *CallbackQuery) {
 			h.sendHelpMenu(cq.Message.Chat.ID, cq.Message.MessageThreadID, msgID, lang)
 		case "setapi":
 			h.handleSetApiFlow(cq.From.ID, cq.Message.Chat.ID, cq.Message.MessageThreadID, msgID, lang)
+		case "tutorialapi":
+			h.sendApiTutorial(cq.Message.Chat.ID, msgID, lang)
 		case "lang":
 			h.sendLangMenu(cq.Message.Chat.ID, cq.Message.MessageThreadID, msgID, lang)
 		case "back", "cancelapi":
@@ -541,10 +543,12 @@ func (h *Handler) handleSetApiFlow(userID int64, chatID int64, threadID int, msg
 	}
 
 	text := fmt.Sprintf(h.i18n.Get(lang, "set_api_instruction"), currentKeys)
+	btnTutorial := h.i18n.Get(lang, "btn_how_to_get_api")
 	btnCancel := h.i18n.Get(lang, "btn_cancel")
 
 	markup := InlineKeyboardMarkup{
 		InlineKeyboard: [][]InlineKeyboardButton{
+			{{Text: btnTutorial, CallbackData: "action_tutorialapi"}},
 			{{Text: btnCancel, CallbackData: "action_back"}},
 		},
 	}
@@ -558,6 +562,27 @@ func (h *Handler) handleSetApiFlow(userID int64, chatID int64, threadID int, msg
 	} else {
 		h.editMsg(chatID, msgID, text, true, markup)
 	}
+}
+
+func (h *Handler) sendApiTutorial(chatID int64, msgID int, lang string) {
+	title := h.i18n.Get(lang, "api_tutorial_title")
+	steps := h.i18n.Get(lang, "api_tutorial_steps")
+	fullMsg := title + "\n\n" + steps
+
+	btnOpen := h.i18n.Get(lang, "btn_open_groq")
+	btnBack := "🔙 Back"
+	if lang == "id" {
+		btnBack = "🔙 Kembali"
+	}
+
+	markup := InlineKeyboardMarkup{
+		InlineKeyboard: [][]InlineKeyboardButton{
+			{{Text: btnOpen, URL: "https://console.groq.com/keys"}},
+			{{Text: btnBack, CallbackData: "action_setapi"}},
+		},
+	}
+
+	h.editMsg(chatID, msgID, fullMsg, true, markup)
 }
 
 func (h *Handler) sendMyBots(userID int64, chatID int64, threadID int, msgID int, lang string) {

@@ -18,5 +18,10 @@
   "api_saved": "✅ API key Anda telah dienkripsi dengan aman dan disimpan ke database.",
   "action_canceled": "Aksi dibatalkan.",
   "missing_api_key": "⚠️ Pemilik bot ini belum mengatur API Key Groq mereka. Silakan hubungi pembuat bot ini.",
-  "create_bot_instruction": "Klik tombol di bawah untuk mulai membuat bot kloningan:"
+  "create_bot_instruction": "Klik tombol di bawah untuk mulai membuat bot kloningan:",
+
+ "btn_how_to_get_api": "💡 Cara dapat API Key?",
+  "api_tutorial_title": "**Cara Mendapatkan API Key Groq**",
+  "api_tutorial_steps": "Ikuti langkah mudah berikut:\n\n1. Buka **Groq Console** dengan menekan tombol di bawah.\n2. Login menggunakan akun Google atau GitHub Anda.\n3. Klik tombol **\"Create API Key\"**.\n4. Beri nama bebas (contoh: \"Bot Saya\") lalu klik **Submit**.\n5. **Salin (Copy)** kode kuncinya (diawali dengan `gsk_...`).\n6. Kembali ke sini dan **tempel (Paste)** kuncinya di chat ini.",
+  "btn_open_groq": "🌐 Buka Groq Console"
 }
