@@ -10,6 +10,8 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"context"
+	"sync"
 	"time"
 )
 
@@ -18,18 +20,23 @@ var (
 	groqClient *groq.Client
 	i18nSys    *i18n.I18n
 	cfg        *config.Config
+	activeBots   = make(map[int64]context.CancelFunc)
+	activeBotsMu sync.Mutex
 )
 
 func main() {
 	log.Println("Starting Public Bot Factory Backend with Secure BYOK...")
 
 	cfg = config.Load()
+	premiumCfg := config.LoadPremium()
+	log.Printf("Premium System Active. Free bots limit: %d, Price: %d XTR\n", premiumCfg.MaxFreeBots, premiumCfg.PremiumPriceStars)
 	if cfg.TelegramToken == "" || cfg.EncryptionKey == "" {
 		log.Fatalf("Missing critical environment variables (Token or Encryption Key)")
 	}
 
 	i18nSys = i18n.New()
 	db = database.New(cfg.DatabaseURL)
+	
 	groqClient = groq.New()
 
 	startBotInstance(cfg.TelegramToken, true)
@@ -69,7 +76,19 @@ func startBotInstance(token string, isManager bool) {
 			startBotInstance(newToken, false)
 		}
 
-		handler := telegram.NewHandler(tgClient, db, groqClient, i18nSys, botUser, cfg.EncryptionKey, isManager, onNewBotSpawned)
+
+		premiumCfg := config.LoadPremium()
+		handler := telegram.NewHandler(tgClient, db, groqClient, i18nSys, premiumCfg, botUser, cfg.EncryptionKey, isManager, onNewBotSpawned)
+
+		handler.OnDeleteBot = func(id int64) {
+			activeBotsMu.Lock()
+			if cancel, exists := activeBots[id]; exists {
+				cancel()
+				delete(activeBots, id)
+				log.Printf("Instance for Bot ID %d has been terminated.\n", id)
+			}
+			activeBotsMu.Unlock()
+		}
 
 		offset := 0
 		for {

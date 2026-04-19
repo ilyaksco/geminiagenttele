@@ -23,5 +23,18 @@
   "btn_how_to_get_api": "💡 How to get API Key?",
   "api_tutorial_title": "**How to Get Groq API Key**",
   "api_tutorial_steps": "Follow these simple steps:\n\n1. Visit the **Groq Console** by clicking the button below.\n2. Login using your Google or GitHub account.\n3. Click the **\"Create API Key\"** button.\n4. Give it a name (e.g., \"My Bot\") and click **Submit**.\n5. **Copy** the key (starts with `gsk_...`).\n6. Come back here and **paste** the key in this chat.",
-  "btn_open_groq": "🌐 Open Groq Console"
+  "btn_open_groq": "🌐 Open Groq Console",
+
+  "limit_reached": "⚠️ **Bot Limit Reached**\n\nYou have created the maximum of %d free bots.\n\nUpgrade to Premium using **Telegram Stars** to create unlimited bots and support this project!",
+  "premium_success": "✅ **Payment Successful!**\n\nThank you! You are now a Premium user. You can now create unlimited bots.",
+
+  "premium_menu_title": "🌟 **Premium Features**",
+  "premium_features_list": "By upgrading to Premium, you will get:\n\n• **Unlimited Bot Creation**: No more 5-bot limit.\n• **Faster Response**: Priority processing for AI.\n• **Priority Support**: Access to new features first.\n• **Ad-Free**: A cleaner management experience.",
+  "btn_buy_premium_xtr": "⭐ Get Premium (%d Stars)",
+
+  "btn_buy_premium_stars": "⭐ Upgrade Premium (%d Stars)",
+  "premium_invoice_title": "Premium Access",
+  "premium_invoice_desc": "Unlock unlimited bots and premium features for %d days.",
+
+  "chat_cleared": "🧹 **Memory Cleared!**\n\nI have forgotten our previous conversation. I'm ready for a new topic! What's on your mind?"
 }

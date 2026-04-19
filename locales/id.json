@@ -23,5 +23,18 @@
  "btn_how_to_get_api": "💡 Cara dapat API Key?",
   "api_tutorial_title": "**Cara Mendapatkan API Key Groq**",
   "api_tutorial_steps": "Ikuti langkah mudah berikut:\n\n1. Buka **Groq Console** dengan menekan tombol di bawah.\n2. Login menggunakan akun Google atau GitHub Anda.\n3. Klik tombol **\"Create API Key\"**.\n4. Beri nama bebas (contoh: \"Bot Saya\") lalu klik **Submit**.\n5. **Salin (Copy)** kode kuncinya (diawali dengan `gsk_...`).\n6. Kembali ke sini dan **tempel (Paste)** kuncinya di chat ini.",
-  "btn_open_groq": "🌐 Buka Groq Console"
+  "btn_open_groq": "🌐 Buka Groq Console",
+
+  "limit_reached": "⚠️ **Batas Bot Tercapai**\n\nAnda telah membuat maksimal %d bot gratis.\n\nUpgrade ke Premium menggunakan **Telegram Stars** untuk membuat bot tanpa batas dan mendukung proyek ini!",
+  "premium_success": "✅ **Pembayaran Berhasil!**\n\nTerima kasih! Anda sekarang adalah pengguna Premium. Anda sudah bisa membuat bot tanpa batas.",
+
+  "premium_menu_title": "🌟 **Fitur Premium**",
+  "premium_features_list": "Dengan upgrade ke Premium, Anda akan mendapatkan:\n\n• **Buat Bot Tanpa Batas**: Tidak ada lagi batas 5 bot.\n• **Respon Lebih Cepat**: Pemrosesan prioritas untuk AI.\n• **Dukungan Prioritas**: Akses fitur baru lebih awal.\n• **Bebas Iklan**: Pengalaman manajemen yang lebih bersih.",
+  "btn_buy_premium_xtr": "⭐ Beli Premium (%d Stars)",
+
+  "btn_buy_premium_stars": "⭐ Upgrade Premium (%d Stars)",
+  "premium_invoice_title": "Akses Premium",
+  "premium_invoice_desc": "Buka fitur buat bot tanpa batas dan fitur premium lainnya selama %d hari.",
+
+  "chat_cleared": "🧹 **Ingatan Dibersihkan!**\n\nSaya telah melupakan percakapan kita sebelumnya. Saya siap untuk topik baru! Apa yang ingin Anda bahas?"
 }

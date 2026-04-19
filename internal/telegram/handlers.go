@@ -6,6 +6,7 @@ import (
 	"gemini-agent/internal/database"
 	"gemini-agent/internal/groq"
 	"gemini-agent/internal/i18n"
+	"gemini-agent/config"
 	"log"
 	"regexp"
 	"strings"
@@ -17,20 +18,23 @@ type Handler struct {
 	db            *database.DB
 	llm           *groq.Client
 	i18n          *i18n.I18n
+	PremiumCfg    *config.PremiumConfig
 	BotUser       *User
 	EncryptionKey string
 	IsManager     bool
 	OnNewBot      func(botID int64, token string)
+	OnDeleteBot   func(botID int64)
 	userStates    map[int64]string
 	stateMu       sync.RWMutex
 }
 
-func NewHandler(tg *Client, db *database.DB, llm *groq.Client, i18n *i18n.I18n, botUser *User, encryptionKey string, isManager bool, onNewBot func(botID int64, token string)) *Handler {
+func NewHandler(tg *Client, db *database.DB, llm *groq.Client, i18n *i18n.I18n, premiumCfg *config.PremiumConfig, botUser *User, encryptionKey string, isManager bool, onNewBot func(botID int64, token string)) *Handler {
 	return &Handler{
 		tg:            tg,
 		db:            db,
 		llm:           llm,
 		i18n:          i18n,
+		PremiumCfg:    premiumCfg,
 		BotUser:       botUser,
 		EncryptionKey: encryptionKey,
 		IsManager:     isManager,
@@ -42,11 +46,20 @@ func NewHandler(tg *Client, db *database.DB, llm *groq.Client, i18n *i18n.I18n, 
 func (h *Handler) HandleUpdate(u Update) {
 	if u.ManagedBot != nil {
 		go h.handleManagedBotUpdate(u.ManagedBot)
+	} else if u.PreCheckoutQuery != nil {
+		go h.handlePreCheckoutQuery(u.PreCheckoutQuery)
 	} else if u.Message != nil {
 		go h.handleMessage(u.Message)
 	} else if u.CallbackQuery != nil {
 		go h.handleCallbackQuery(u.CallbackQuery)
 	}
+}
+
+func (h *Handler) handlePreCheckoutQuery(pcq *PreCheckoutQuery) {
+	h.tg.AnswerPreCheckoutQuery(AnswerPreCheckoutQueryReq{
+		PreCheckoutQueryID: pcq.ID,
+		Ok:                 true,
+	})
 }
 
 func (h *Handler) handleManagedBotUpdate(mb *ManagedBotUpdated) {
@@ -142,12 +155,30 @@ func (h *Handler) handleDeleteBotFlow(chatID int64, msgID int, botID int64, lang
 		return
 	}
 
-	h.db.DeleteManagedBot(botID, h.db.GetBotOwner(botID))
-	h.sendMyBots(h.db.GetBotOwner(botID), chatID, 0, msgID, lang)
+	ownerID := h.db.GetBotOwner(botID)
+	
+	// 1. Stop the running bot instance first
+	if h.OnDeleteBot != nil {
+		h.OnDeleteBot(botID)
+	}
+
+	// 2. Delete from database
+	h.db.DeleteManagedBot(botID, ownerID)
+
+	// 3. Refresh the list for the correct owner
+	h.sendMyBots(ownerID, chatID, 0, msgID, lang)
 }
 
 func (h *Handler) handleMessage(m *Message) {
 	lang := h.db.GetUserLang(m.From.ID)
+
+	if m.SuccessfulPayment != nil {
+		if m.SuccessfulPayment.InvoicePayload == "premium_upgrade" {
+			h.db.GrantPremium(m.From.ID, h.PremiumCfg.PremiumDurationDays)
+			h.sendMsg(m.Chat.ID, m.MessageThreadID, m.MessageID, h.i18n.Get(lang, "premium_success"), true, nil)
+		}
+		return
+	}
 
 	if m.ForumTopicCreated != nil {
 		if !h.IsManager {
@@ -209,8 +240,23 @@ func (h *Handler) handleMessage(m *Message) {
 			return
 		}
 
+		if strings.HasPrefix(m.Text, "/newchat") {
+			err := h.db.ClearChatHistory(h.BotUser.ID, m.Chat.ID, m.MessageThreadID)
+			if err != nil {
+				h.sendMsg(m.Chat.ID, m.MessageThreadID, m.MessageID, "❌ Failed to clear history.", true, nil)
+			} else {
+				h.sendMsg(m.Chat.ID, m.MessageThreadID, m.MessageID, h.i18n.Get(lang, "chat_cleared"), true, nil)
+			}
+			return
+		}
+
 		if strings.HasPrefix(m.Text, "/link") {
-			h.handleCreateBotFlow(m.Chat.ID, m.MessageThreadID, 0, lang)
+			h.handleCreateBotFlow(m.From.ID, m.Chat.ID, m.MessageThreadID, 0, lang)
+			return
+		}
+
+		if strings.HasPrefix(m.Text, "/premium") {
+			h.sendPremiumMenu(m.Chat.ID, m.MessageThreadID, 0, lang)
 			return
 		}
 
@@ -259,98 +305,79 @@ func (h *Handler) handleMessage(m *Message) {
 
 	isPrivate := m.Chat.Type == "private"
 	isMentioned := false
-	hasOtherMentions := false
-
 	if h.BotUser != nil {
-		botUsernameTag := "@" + h.BotUser.Username
-		isMentioned = strings.Contains(m.Text, botUsernameTag)
-
-		words := strings.Fields(m.Text)
-		for _, w := range words {
-			if strings.HasPrefix(w, "@") && !strings.Contains(w, botUsernameTag) {
-				hasOtherMentions = true
-				break
-			}
-		}
+		isMentioned = strings.Contains(m.Text, "@"+h.BotUser.Username)
 	}
-
 	isReplyToMe := h.BotUser != nil && m.ReplyToMessage != nil && m.ReplyToMessage.From.ID == h.BotUser.ID
 
-	shouldRespond := false
-	if isPrivate {
-		shouldRespond = true
-	} else if isMentioned {
-		shouldRespond = true
-	} else if isReplyToMe && !hasOtherMentions {
-		shouldRespond = true
-	}
+	// BLOK KHUSUS BOT AI (CLONE)
+	if isPrivate || isMentioned || isReplyToMe {
+		
+		// CEK GHOST INSTANCE: Jika bot sudah dihapus dari DB, abaikan semua pesan
+		ownerID := h.db.GetBotOwner(h.BotUser.ID)
+		if ownerID == 0 && !h.IsManager {
+			return
+		}
 
-	if !shouldRespond {
-		return
-	}
+		// LOGIKA START
+		if strings.HasPrefix(m.Text, "/start") {
+			msg := fmt.Sprintf("Hello, I am **%s**! How can I help you today?", h.BotUser.FirstName)
+			if lang == "id" {
+				msg = fmt.Sprintf("Halo, saya adalah **%s**! Apa yang bisa saya bantu hari ini?", h.BotUser.FirstName)
+			}
+			h.sendMsg(m.Chat.ID, m.MessageThreadID, m.MessageID, msg, true, nil)
+			return
+		}
 
-	if strings.HasPrefix(m.Text, "/start") {
-		var msg string
-		if lang == "id" {
-			msg = fmt.Sprintf("Halo, saya adalah **%s**! Apa yang bisa saya bantu hari ini?", h.BotUser.FirstName)
+		// LOGIKA NEWCHAT (Hapus Ingatan) HARUS DI SINI
+		if strings.HasPrefix(m.Text, "/newchat") {
+			err := h.db.ClearChatHistory(h.BotUser.ID, m.Chat.ID, m.MessageThreadID)
+			if err != nil {
+				h.sendMsg(m.Chat.ID, m.MessageThreadID, m.MessageID, "❌ Failed to clear history.", true, nil)
+			} else {
+				h.sendMsg(m.Chat.ID, m.MessageThreadID, m.MessageID, h.i18n.Get(lang, "chat_cleared"), true, nil)
+			}
+			return // Return ini mencegah pesan diteruskan ke AI
+		}
+
+		// PROSES PENGIRIMAN KE AI GROQ
+		h.tg.SendChatAction(SendChatActionReq{ChatID: m.Chat.ID, MessageThreadID: m.MessageThreadID, Action: "typing"})
+		
+		encryptedKeys := h.db.GetUserAPIKeys(ownerID)
+		decryptedKeys := ""
+		if encryptedKeys != "" {
+			decryptedKeys, _ = crypto.Decrypt(encryptedKeys, h.EncryptionKey)
+		}
+		apiKeys := strings.Split(decryptedKeys, ",")
+		var validKeys []string
+		for _, k := range apiKeys {
+			if k != "" {
+				validKeys = append(validKeys, k)
+			}
+		}
+		if len(validKeys) == 0 {
+			h.sendMsg(m.Chat.ID, m.MessageThreadID, m.MessageID, h.i18n.Get(lang, "missing_api_key"), true, nil)
+			return
+		}
+		
+		// Simpan pesan user
+		h.db.SaveMessage(h.BotUser.ID, m.Chat.ID, m.MessageThreadID, "user", m.Text)
+		
+		// Ambil sejarah obrolan (maksimal 6 pesan terakhir)
+		rawHistory := h.db.GetHistory(h.BotUser.ID, m.Chat.ID, m.MessageThreadID, 6)
+		llmHistory := buildGroqHistory(rawHistory, m.Text)
+		systemPrompt := h.db.GetBotPrompt(h.BotUser.ID)
+		
+		// Generate jawaban AI
+		replyText, err := h.llm.GenerateChat(validKeys, systemPrompt, llmHistory)
+		if err != nil {
+			replyText = h.i18n.Get(lang, "error_occurred")
 		} else {
-			msg = fmt.Sprintf("Hello, I am **%s**! How can I help you today?", h.BotUser.FirstName)
+			// Simpan jawaban AI
+			h.db.SaveMessage(h.BotUser.ID, m.Chat.ID, m.MessageThreadID, "assistant", replyText)
 		}
-		h.sendMsg(m.Chat.ID, m.MessageThreadID, m.MessageID, msg, true, nil)
-		return
+		h.sendMsg(m.Chat.ID, m.MessageThreadID, m.MessageID, replyText, true, nil)
 	}
-
-	h.tg.SendChatAction(SendChatActionReq{
-		ChatID:          m.Chat.ID,
-		MessageThreadID: m.MessageThreadID,
-		Action:          "typing",
-	})
-
-	ownerID := h.db.GetBotOwner(h.BotUser.ID)
-	encryptedKeys := h.db.GetUserAPIKeys(ownerID)
-	decryptedKeys := ""
-	if encryptedKeys != "" {
-		decryptedKeys, _ = crypto.Decrypt(encryptedKeys, h.EncryptionKey)
-	}
-
-	apiKeys := strings.Split(decryptedKeys, ",")
-	validKeys := []string{}
-	for _, k := range apiKeys {
-		if k != "" {
-			validKeys = append(validKeys, k)
-		}
-	}
-
-	if len(validKeys) == 0 {
-		h.sendMsg(m.Chat.ID, m.MessageThreadID, m.MessageID, h.i18n.Get(lang, "missing_api_key"), true, nil)
-		return
-	}
-
-	promptText := m.Text
-	if m.ReplyToMessage != nil && m.ReplyToMessage.Text != "" {
-		repliedName := m.ReplyToMessage.From.FirstName
-		if m.ReplyToMessage.From.IsBot {
-			repliedName += " (Bot)"
-		}
-		promptText = fmt.Sprintf("[In reply to %s's message: \"%s\"]\n\nUser says: %s", repliedName, m.ReplyToMessage.Text, m.Text)
-	}
-
-	rawHistory := h.db.GetHistory(h.BotUser.ID, m.Chat.ID, m.MessageThreadID, 6)
-	llmHistory := buildGroqHistory(rawHistory, promptText)
-
-	h.db.SaveMessage(h.BotUser.ID, m.Chat.ID, m.MessageThreadID, "user", promptText)
-
-	systemPrompt := h.db.GetBotPrompt(h.BotUser.ID)
-
-	replyText, err := h.llm.GenerateChat(validKeys, systemPrompt, llmHistory)
-	if err != nil {
-		log.Printf("Error from Groq: %v\n", err)
-		replyText = h.i18n.Get(lang, "error_occurred")
-	} else {
-		h.db.SaveMessage(h.BotUser.ID, m.Chat.ID, m.MessageThreadID, "assistant", replyText)
-	}
-
-	h.sendMsg(m.Chat.ID, m.MessageThreadID, m.MessageID, replyText, true, nil)
 }
 
 func buildGroqHistory(rawHistory []database.ChatMessage, newText string) []groq.Message {
@@ -494,7 +521,18 @@ func (h *Handler) handleCallbackQuery(cq *CallbackQuery) {
 	if parts[0] == "action" {
 		switch parts[1] {
 		case "create":
-			h.handleCreateBotFlow(cq.Message.Chat.ID, cq.Message.MessageThreadID, msgID, lang)
+			h.handleCreateBotFlow(cq.From.ID, cq.Message.Chat.ID, cq.Message.MessageThreadID, msgID, lang)
+		case "buypremium":
+			title := h.i18n.Get(lang, "premium_invoice_title")
+			desc := fmt.Sprintf(h.i18n.Get(lang, "premium_invoice_desc"), h.PremiumCfg.PremiumDurationDays)
+			h.tg.SendInvoice(SendInvoiceReq{
+				ChatID:      cq.Message.Chat.ID,
+				Title:       title,
+				Description: desc,
+				Payload:     "premium_upgrade",
+				Currency:    "XTR",
+				Prices:      []LabeledPrice{{Label: title, Amount: h.PremiumCfg.PremiumPriceStars}},
+			})
 		case "mybots":
 			h.sendMyBots(cq.From.ID, cq.Message.Chat.ID, cq.Message.MessageThreadID, msgID, lang)
 		case "help":
@@ -505,14 +543,44 @@ func (h *Handler) handleCallbackQuery(cq *CallbackQuery) {
 			h.sendApiTutorial(cq.Message.Chat.ID, msgID, lang)
 		case "lang":
 			h.sendLangMenu(cq.Message.Chat.ID, cq.Message.MessageThreadID, msgID, lang)
+		case "premium":
+			h.sendPremiumMenu(cq.Message.Chat.ID, cq.Message.MessageThreadID, msgID, lang)
 		case "back", "cancelapi":
 			h.sendMainMenu(cq.Message.Chat.ID, cq.Message.MessageThreadID, msgID, lang, h.i18n.Get(lang, "welcome"))
 		}
 	}
 }
 
-func (h *Handler) handleCreateBotFlow(chatID int64, threadID int, msgID int, lang string) {
-	link := fmt.Sprintf("https://t.me/newbot/%s/Cloneth_", h.BotUser.Username)
+func (h *Handler) handleCreateBotFlow(userID int64, chatID int64, threadID int, msgID int, lang string) {
+	botCount := h.db.CountUserBots(userID)
+	isPremium := h.db.IsUserPremium(userID)
+
+	if botCount >= h.PremiumCfg.MaxFreeBots && !isPremium {
+		text := fmt.Sprintf(h.i18n.Get(lang, "limit_reached"), h.PremiumCfg.MaxFreeBots)
+		btnUpgrade := fmt.Sprintf(h.i18n.Get(lang, "btn_buy_premium_stars"), h.PremiumCfg.PremiumPriceStars)
+		btnBack := "🔙 Back"
+		if lang == "id" {
+			btnBack = "🔙 Kembali"
+		}
+
+		markup := InlineKeyboardMarkup{
+			InlineKeyboard: [][]InlineKeyboardButton{
+				{{Text: btnUpgrade, CallbackData: "action_buypremium"}},
+				{{Text: btnBack, CallbackData: "action_back"}},
+			},
+		}
+
+		if msgID == 0 {
+			h.sendMsg(chatID, threadID, 0, text, true, markup)
+		} else {
+			h.editMsg(chatID, msgID, text, true, markup)
+		}
+		return
+	}
+
+	suggestedUsername := fmt.Sprintf("%s_", h.BotUser.Username)
+	link := fmt.Sprintf("https://t.me/newbot/%s/%s", h.BotUser.Username, suggestedUsername)
+	
 	btnTxt := h.i18n.Get(lang, "btn_go_create")
 	btnBack := "🔙 Back"
 	if lang == "id" {
@@ -607,8 +675,12 @@ func (h *Handler) sendMyBots(userID int64, chatID int64, threadID int, msgID int
 
 	msg := h.i18n.Get(lang, "my_bots_msg")
 	for _, bot := range bots {
+		displayName := bot.Name
+		if displayName == "" {
+			displayName = bot.Username
+		}
 		buttons = append(buttons, []InlineKeyboardButton{
-			{Text: "🤖 " + bot.Name, CallbackData: fmt.Sprintf("bot_manage_%d", bot.BotID)},
+			{Text: "🤖 " + displayName, CallbackData: fmt.Sprintf("bot_manage_%d", bot.BotID)},
 		})
 	}
 	buttons = append(buttons, []InlineKeyboardButton{{Text: btnBack, CallbackData: "action_back"}})
@@ -630,6 +702,7 @@ func (h *Handler) sendMainMenu(chatID int64, threadID int, msgID int, lang strin
 	btnHelp := h.i18n.Get(lang, "btn_help")
 	btnSetApi := h.i18n.Get(lang, "btn_setapi")
 	btnLang := "🌐 Language"
+	btnPremium := "🌟 Premium"
 
 	markup := InlineKeyboardMarkup{
 		InlineKeyboard: [][]InlineKeyboardButton{
@@ -643,6 +716,7 @@ func (h *Handler) sendMainMenu(chatID int64, threadID int, msgID int, lang strin
 			},
 			{
 				{Text: btnHelp, CallbackData: "action_help"},
+				{Text: btnPremium, CallbackData: "action_premium"},
 			},
 		},
 	}
@@ -863,4 +937,29 @@ func (h *Handler) getOpenHTMLTags(text string) []string {
 		}
 	}
 	return stack
+}
+
+func (h *Handler) sendPremiumMenu(chatID int64, threadID int, msgID int, lang string) {
+	title := h.i18n.Get(lang, "premium_menu_title")
+	features := h.i18n.Get(lang, "premium_features_list")
+	fullMsg := title + "\n\n" + features
+
+	btnBuy := fmt.Sprintf(h.i18n.Get(lang, "btn_buy_premium_xtr"), h.PremiumCfg.PremiumPriceStars)
+	btnBack := "🔙 Back"
+	if lang == "id" {
+		btnBack = "🔙 Kembali"
+	}
+
+	markup := InlineKeyboardMarkup{
+		InlineKeyboard: [][]InlineKeyboardButton{
+			{{Text: btnBuy, CallbackData: "action_buypremium"}},
+			{{Text: btnBack, CallbackData: "action_back"}},
+		},
+	}
+
+	if msgID == 0 {
+		h.sendMsg(chatID, threadID, 0, fullMsg, true, markup)
+	} else {
+		h.editMsg(chatID, msgID, fullMsg, true, markup)
+	}
 }

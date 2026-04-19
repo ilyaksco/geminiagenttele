@@ -21,6 +21,7 @@ type Update struct {
 	Message       *Message           `json:"message,omitempty"`
 	CallbackQuery *CallbackQuery     `json:"callback_query,omitempty"`
 	ManagedBot    *ManagedBotUpdated `json:"managed_bot,omitempty"`
+	PreCheckoutQuery *PreCheckoutQuery `json:"pre_checkout_query,omitempty"`
 }
 
 type Message struct {
@@ -32,6 +33,7 @@ type Message struct {
 	IsTopicMessage    bool               `json:"is_topic_message,omitempty"`
 	ForumTopicCreated *ForumTopicCreated `json:"forum_topic_created,omitempty"`
 	ReplyToMessage    *Message           `json:"reply_to_message,omitempty"`
+	SuccessfulPayment *SuccessfulPayment `json:"successful_payment,omitempty"`
 }
 
 type ManagedBotUpdated struct {
@@ -267,5 +269,59 @@ func (c *Client) AnswerCallbackQuery(callbackQueryID string) {
 	url := fmt.Sprintf("%s/answerCallbackQuery", c.baseURL)
 	reqBody := map[string]string{"callback_query_id": callbackQueryID}
 	jsonData, _ := json.Marshal(reqBody)
+	c.httpClient.Post(url, "application/json", bytes.NewBuffer(jsonData))
+}
+
+type PreCheckoutQuery struct {
+	ID             string `json:"id"`
+	From           User   `json:"from"`
+	Currency       string `json:"currency"`
+	TotalAmount    int    `json:"total_amount"`
+	InvoicePayload string `json:"invoice_payload"`
+}
+
+type SuccessfulPayment struct {
+	Currency                string `json:"currency"`
+	TotalAmount             int    `json:"total_amount"`
+	InvoicePayload          string `json:"invoice_payload"`
+	TelegramPaymentChargeID string `json:"telegram_payment_charge_id"`
+	ProviderPaymentChargeID string `json:"provider_payment_charge_id"`
+}
+
+type LabeledPrice struct {
+	Label  string `json:"label"`
+	Amount int    `json:"amount"`
+}
+
+type SendInvoiceReq struct {
+	ChatID        int64          `json:"chat_id"`
+	Title         string         `json:"title"`
+	Description   string         `json:"description"`
+	Payload       string         `json:"payload"`
+	ProviderToken string         `json:"provider_token"`
+	Currency      string         `json:"currency"`
+	Prices        []LabeledPrice `json:"prices"`
+}
+
+type AnswerPreCheckoutQueryReq struct {
+	PreCheckoutQueryID string `json:"pre_checkout_query_id"`
+	Ok                 bool   `json:"ok"`
+	ErrorMessage       string `json:"error_message,omitempty"`
+}
+
+func (c *Client) SendInvoice(req SendInvoiceReq) error {
+	url := fmt.Sprintf("%s/sendInvoice", c.baseURL)
+	jsonData, _ := json.Marshal(req)
+	resp, err := c.httpClient.Post(url, "application/json", bytes.NewBuffer(jsonData))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return nil
+}
+
+func (c *Client) AnswerPreCheckoutQuery(req AnswerPreCheckoutQueryReq) {
+	url := fmt.Sprintf("%s/answerPreCheckoutQuery", c.baseURL)
+	jsonData, _ := json.Marshal(req)
 	c.httpClient.Post(url, "application/json", bytes.NewBuffer(jsonData))
 }

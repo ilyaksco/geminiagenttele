@@ -3,6 +3,7 @@ package database
 import (
 	"database/sql"
 	"log"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -36,6 +37,10 @@ func New(dbURL string) *DB {
 		log.Fatalf("Failed to ping database: %v\n", err)
 	}
 
+	_, _ = conn.Exec("PRAGMA journal_mode=WAL;")
+	_, _ = conn.Exec("PRAGMA synchronous=NORMAL;")
+	_, _ = conn.Exec("PRAGMA cache_size=-2000;")
+
 	queries := []string{
 		`CREATE TABLE IF NOT EXISTS users (
 			id INTEGER PRIMARY KEY,
@@ -62,10 +67,7 @@ func New(dbURL string) *DB {
 	}
 
 	for _, q := range queries {
-		_, err = conn.Exec(q)
-		if err != nil && err.Error() != "table chat_history already exists" && err.Error() != "table managed_bots already exists" && err.Error() != "table users already exists" {
-			log.Printf("Init query skipped/handled: %v\n", err)
-		}
+		_, _ = conn.Exec(q)
 	}
 
 	_, _ = conn.Exec(`ALTER TABLE managed_bots ADD COLUMN name TEXT DEFAULT '';`)
@@ -73,9 +75,39 @@ func New(dbURL string) *DB {
 	_, _ = conn.Exec(`ALTER TABLE chat_history ADD COLUMN bot_id INTEGER DEFAULT 0;`)
 	_, _ = conn.Exec(`ALTER TABLE managed_bots ADD COLUMN owner_id INTEGER DEFAULT 0;`)
 	_, _ = conn.Exec(`ALTER TABLE users ADD COLUMN encrypted_api_keys TEXT DEFAULT '';`)
+	_, _ = conn.Exec(`ALTER TABLE users ADD COLUMN premium_until DATETIME;`)
 
 	log.Println("Database connection established and tables verified")
 	return &DB{Conn: conn}
+}
+
+
+func (db *DB) CountUserBots(ownerID int64) int {
+	var count int
+	query := `SELECT COUNT(*) FROM managed_bots WHERE owner_id = ?;`
+	err := db.Conn.QueryRow(query, ownerID).Scan(&count)
+	if err != nil {
+		return 0
+	}
+	return count
+}
+
+func (db *DB) IsUserPremium(ownerID int64) bool {
+	var premiumUntil sql.NullTime
+	query := `SELECT premium_until FROM users WHERE id = ?;`
+	err := db.Conn.QueryRow(query, ownerID).Scan(&premiumUntil)
+	if err != nil || !premiumUntil.Valid {
+		return false
+	}
+	return premiumUntil.Time.After(time.Now())
+}
+
+func (db *DB) GrantPremium(ownerID int64, days int) {
+	query := `INSERT INTO users (id, premium_until) VALUES (?, datetime('now', '+' || ? || ' days')) ON CONFLICT(id) DO UPDATE SET premium_until = datetime('now', '+' || ? || ' days');`
+	_, err := db.Conn.Exec(query, ownerID, days, days)
+	if err != nil {
+		log.Printf("Failed to grant premium: %v\n", err)
+	}
 }
 
 func (db *DB) SetUserAPIKeys(userID int64, encryptedKeys string) {
@@ -99,39 +131,50 @@ func (db *DB) GetUserAPIKeys(userID int64) string {
 	return ""
 }
 
+// --- TIMPA FUNGSI LAMA DENGAN KETIGA FUNGSI INI DI internal/database/sqlite.go ---
+
 func (db *DB) SaveMessage(botID int64, chatID int64, threadID int, role string, content string) {
-	query := `INSERT INTO chat_history (bot_id, chat_id, thread_id, role, content) VALUES (?, ?, ?, ?, ?)`
+	// Sekarang bot_id benar-benar dimasukkan ke dalam database!
+	query := `INSERT INTO chat_history (bot_id, chat_id, thread_id, role, content) VALUES (?, ?, ?, ?, ?);`
 	_, err := db.Conn.Exec(query, botID, chatID, threadID, role, content)
 	if err != nil {
-		log.Printf("Failed to save chat history: %v\n", err)
+		log.Printf("Failed to save message: %v\n", err)
 	}
 }
 
-func (db *DB) GetHistory(botID int64, chatID int64, threadID int, limit int) []ChatMessage {
-	query := `
-	SELECT role, content FROM (
-		SELECT id, role, content FROM chat_history 
-		WHERE bot_id = ? AND chat_id = ? AND thread_id = ? 
-		ORDER BY id DESC LIMIT ?
-	) ORDER BY id ASC;`
+// --- TIMPA FUNGSI GetHistory DI internal/database/sqlite.go DENGAN INI ---
 
-	rows, err := db.Conn.Query(query, botID, chatID, threadID, limit)
+func (db *DB) GetHistory(botID int64, chatID int64, threadID int, limit int) []ChatMessage {
+	var history []ChatMessage
+	
+	// Sekarang bot hanya membaca ingatan miliknya sendiri (termasuk legacy bot_id = 0)
+	query := `
+		SELECT role, content FROM (
+			SELECT role, content, id FROM chat_history 
+			WHERE chat_id = ? AND thread_id = ? AND (bot_id = ? OR bot_id = 0)
+			ORDER BY id DESC LIMIT ?
+		) ORDER BY id ASC;
+	`
+	rows, err := db.Conn.Query(query, chatID, threadID, botID, limit)
 	if err != nil {
-		log.Printf("Failed to fetch chat history: %v\n", err)
-		return nil
+		return history
 	}
 	defer rows.Close()
 
-	var history []ChatMessage
 	for rows.Next() {
-		var msg ChatMessage
-		if err := rows.Scan(&msg.Role, &msg.Content); err != nil {
-			log.Printf("Failed to scan history row: %v\n", err)
-			continue
+		var role, content string
+		if err := rows.Scan(&role, &content); err == nil {
+			history = append(history, ChatMessage{Role: role, Content: content})
 		}
-		history = append(history, msg)
 	}
 	return history
+}
+
+func (db *DB) ClearChatHistory(botID int64, chatID int64, threadID int) error {
+	// Menghapus ingatan bot tersebut, sekaligus membersihkan data bug lama (bot_id = 0)
+	query := `DELETE FROM chat_history WHERE chat_id = ? AND thread_id = ? AND (bot_id = ? OR bot_id = 0);`
+	_, err := db.Conn.Exec(query, chatID, threadID, botID)
+	return err
 }
 
 func (db *DB) SaveManagedBot(botID int64, ownerID int64, username string, name string, token string) {
@@ -285,3 +328,6 @@ func (db *DB) GetManagedBots() []ManagedBot {
 	}
 	return bots
 }
+
+// --- TAMBAHKAN DI BAGIAN PALING BAWAH FILE internal/database/sqlite.go ---
+
