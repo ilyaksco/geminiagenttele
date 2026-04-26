@@ -77,11 +77,33 @@ func New(dbURL string) *DB {
 	_, _ = conn.Exec(`ALTER TABLE chat_history ADD COLUMN bot_id INTEGER DEFAULT 0;`)
 	_, _ = conn.Exec(`ALTER TABLE managed_bots ADD COLUMN owner_id INTEGER DEFAULT 0;`)
 	_, _ = conn.Exec(`ALTER TABLE users ADD COLUMN encrypted_api_keys TEXT DEFAULT '';`)
+	_, _ = conn.Exec(`ALTER TABLE users ADD COLUMN encrypted_gemini_keys TEXT DEFAULT '';`)
 	_, _ = conn.Exec(`ALTER TABLE users ADD COLUMN premium_until DATETIME;`)
 	_, _ = conn.Exec(`ALTER TABLE managed_bots ADD COLUMN model TEXT DEFAULT 'openai/gpt-oss-120b';`)
 
 	log.Println("Database connection established and tables verified")
 	return &DB{Conn: conn}
+}
+
+func (db *DB) SetUserGeminiKeys(userID int64, encryptedKeys string) {
+	query := `UPDATE users SET encrypted_gemini_keys = ? WHERE id = ?;`
+	_, err := db.Conn.Exec(query, encryptedKeys, userID)
+	if err != nil {
+		log.Printf("Failed to save user Gemini keys: %v\n", err)
+	}
+}
+
+func (db *DB) GetUserGeminiKeys(userID int64) string {
+	var keys sql.NullString
+	query := `SELECT encrypted_gemini_keys FROM users WHERE id = ?;`
+	err := db.Conn.QueryRow(query, userID).Scan(&keys)
+	if err != nil {
+		return ""
+	}
+	if keys.Valid {
+		return keys.String
+	}
+	return ""
 }
 
 

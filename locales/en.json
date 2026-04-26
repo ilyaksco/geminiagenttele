@@ -36,5 +36,15 @@
   "premium_invoice_title": "Premium Access",
   "premium_invoice_desc": "Unlock unlimited bots and premium features for %d days.",
 
-  "chat_cleared": "🧹 **Memory Cleared!**\n\nI have forgotten our previous conversation. I'm ready for a new topic! What's on your mind?"
+  "chat_cleared": "🧹 **Memory Cleared!**\n\nI have forgotten our previous conversation. I'm ready for a new topic! What's on your mind?",
+
+  "btn_api_groq": "🔑 Set Groq API",
+  "btn_api_gemini": "🔑 Set Gemini API",
+  "api_select_msg": "Select which API provider you want to set the key for:",
+  "set_gemini_api_instruction": "**Gemini API Key Setup**\n\nYour current API keys: \n`%s`\n\n**Please reply by typing your new Gemini API keys directly.**\nYou can use multiple keys by separating them with commas.\n\nPress **Cancel** to abort.",
+  "api_gemini_tutorial_title": "**How to Get Gemini API Key**",
+  "api_gemini_tutorial_steps": "1. Visit **Google AI Studio** by clicking the button below.\n2. Login with your Google account.\n3. Click **Get API Key** and then **Create API Key**.\n4. Copy the key and paste it in this chat.",
+  "btn_open_gemini": "🌐 Open Google AI Studio",
+  "missing_gemini_api_key": "⚠️ The owner of this bot hasn't set up their Gemini API Keys yet.",
+  "models_list": "qwen|Qwen 3 (32B)|qwen/qwen3-32b,gptoss|GPT OSS (120B)|openai/gpt-oss-120b,llama|LLaMA 3.3 (70B)|llama-3.3-70b-versatile,geminiflash|Gemini 3.1 Flash Lite|gemini/gemini-3.1-flash-lite-preview"
 }

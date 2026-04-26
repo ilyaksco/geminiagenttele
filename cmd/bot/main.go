@@ -6,6 +6,7 @@ import (
 	"gemini-agent/internal/groq"
 	"gemini-agent/internal/i18n"
 	"gemini-agent/internal/telegram"
+	"gemini-agent/internal/gemini"
 	"log"
 	"os"
 	"os/signal"
@@ -18,6 +19,7 @@ import (
 var (
 	db         *database.DB
 	groqClient *groq.Client
+	geminiClient *gemini.Client
 	i18nSys    *i18n.I18n
 	cfg        *config.Config
 	activeBots   = make(map[int64]context.CancelFunc)
@@ -38,6 +40,7 @@ func main() {
 	db = database.New(cfg.DatabaseURL)
 	
 	groqClient = groq.New()
+	geminiClient = gemini.New()
 
 	startBotInstance(cfg.TelegramToken, true)
 
@@ -76,9 +79,8 @@ func startBotInstance(token string, isManager bool) {
 			startBotInstance(newToken, false)
 		}
 
-
 		premiumCfg := config.LoadPremium()
-		handler := telegram.NewHandler(tgClient, db, groqClient, i18nSys, premiumCfg, botUser, cfg.EncryptionKey, isManager, onNewBotSpawned)
+		handler := telegram.NewHandler(tgClient, db, groqClient, geminiClient, i18nSys, premiumCfg, botUser, cfg.EncryptionKey, isManager, onNewBotSpawned)
 
 		handler.OnDeleteBot = func(id int64) {
 			activeBotsMu.Lock()
