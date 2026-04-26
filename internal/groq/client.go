@@ -40,9 +40,13 @@ func New() *Client {
 	}
 }
 
-func (c *Client) GenerateChat(apiKeys []string, systemPrompt string, history []Message) (string, error) {
+func (c *Client) GenerateChat(apiKeys []string, systemPrompt string, history []Message, model string) (string, error) {
 	if len(apiKeys) == 0 {
 		return "", fmt.Errorf("no api keys provided by user")
+	}
+
+	if model == "" {
+		model = "openai/gpt-oss-120b"
 	}
 
 	url := "https://api.groq.com/openai/v1/chat/completions"
@@ -57,7 +61,7 @@ func (c *Client) GenerateChat(apiKeys []string, systemPrompt string, history []M
 	finalHistory = append(finalHistory, history...)
 
 	reqBody := ChatRequest{
-		Model:       "openai/gpt-oss-120b",
+		Model:       model,
 		Messages:    finalHistory,
 		Temperature: 0.7,
 		Stream:      false,

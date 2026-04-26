@@ -101,16 +101,18 @@ func (h *Handler) sendBotDashboard(chatID int64, msgID int, botID int64, lang st
 		return
 	}
 
-	text := fmt.Sprintf("🤖 **Bot Dashboard**\n\n**Name:** %s\n**Prompt:** `%s`", bot.Name, bot.SystemPrompt)
+	text := fmt.Sprintf("🤖 **Bot Dashboard**\n\n**Name:** %s\n**Model:** `%s`\n**Prompt:** `%s`", bot.Name, bot.Model, bot.SystemPrompt)
 	if bot.SystemPrompt == "" {
-		text = fmt.Sprintf("🤖 **Bot Dashboard**\n\n**Name:** %s\n**Prompt:** _Not set_", bot.Name)
+		text = fmt.Sprintf("🤖 **Bot Dashboard**\n\n**Name:** %s\n**Model:** `%s`\n**Prompt:** _Not set_", bot.Name, bot.Model)
 	}
 
 	btnSetPrompt := "📝 Set Prompt"
+	btnSetModel := "⚙️ Set Model"
 	btnDelete := "🗑️ Delete Bot"
 	btnBack := "🔙 Back"
 	if lang == "id" {
 		btnSetPrompt = "📝 Atur Prompt"
+		btnSetModel = "⚙️ Atur Model"
 		btnDelete = "🗑️ Hapus Bot"
 		btnBack = "🔙 Kembali"
 	}
@@ -118,9 +120,27 @@ func (h *Handler) sendBotDashboard(chatID int64, msgID int, botID int64, lang st
 	markup := InlineKeyboardMarkup{
 		InlineKeyboard: [][]InlineKeyboardButton{
 			{{Text: "🚀 Open Bot", URL: "https://t.me/" + bot.Username}},
-			{{Text: btnSetPrompt, CallbackData: fmt.Sprintf("bot_prompt_%d", botID)}},
+			{{Text: btnSetModel, CallbackData: fmt.Sprintf("bot_setmodel_%d", botID)}, {Text: btnSetPrompt, CallbackData: fmt.Sprintf("bot_prompt_%d", botID)}},
 			{{Text: btnDelete, CallbackData: fmt.Sprintf("bot_delete_%d", botID)}},
 			{{Text: btnBack, CallbackData: "action_mybots"}},
+		},
+	}
+
+	h.editMsg(chatID, msgID, text, true, markup)
+}
+
+func (h *Handler) sendModelSelection(chatID int64, msgID int, botID int64, lang string) {
+	text := "⚙️ **Select AI Model**\n\nChoose the engine for your bot:"
+	if lang == "id" {
+		text = "⚙️ **Pilih Model AI**\n\nPilih mesin utama untuk bot Anda:"
+	}
+
+	markup := InlineKeyboardMarkup{
+		InlineKeyboard: [][]InlineKeyboardButton{
+			{{Text: "🧠 Qwen 3 (32B)", CallbackData: fmt.Sprintf("bot_savemodel_%d_qwen", botID)}},
+			{{Text: "⚡ GPT OSS (120B) [Default]", CallbackData: fmt.Sprintf("bot_savemodel_%d_gpt", botID)}},
+			{{Text: "🦙 LLaMA 3.3 (70B)", CallbackData: fmt.Sprintf("bot_savemodel_%d_llama", botID)}},
+			{{Text: "🔙 Back", CallbackData: fmt.Sprintf("bot_manage_%d", botID)}},
 		},
 	}
 
@@ -383,10 +403,23 @@ func (h *Handler) handleMessage(m *Message) {
 		llmHistory := buildGroqHistory(rawHistory, fullMessage)
 		systemPrompt := h.db.GetBotPrompt(h.BotUser.ID)
 
-		replyText, err := h.llm.GenerateChat(validKeys, systemPrompt, llmHistory)
+		botData := h.db.GetManagedBot(h.BotUser.ID)
+		model := "openai/gpt-oss-120b"
+		if botData != nil && botData.Model != "" {
+			model = botData.Model
+		}
+
+		replyText, err := h.llm.GenerateChat(validKeys, systemPrompt, llmHistory, model)
 		if err != nil {
 			replyText = h.i18n.Get(lang, "error_occurred")
 		} else {
+			// Menghapus tag <think> dan isinya menggunakan RegEx
+			re := regexp.MustCompile(`(?s)<think>.*?</think>`)
+			replyText = re.ReplaceAllString(replyText, "")
+			
+			// Membersihkan spasi atau baris kosong berlebih di awal string jika ada
+			replyText = strings.TrimSpace(replyText)
+
 			h.db.SaveMessage(h.BotUser.ID, m.Chat.ID, m.MessageThreadID, "assistant", replyText)
 		}
 		h.sendMsg(m.Chat.ID, m.MessageThreadID, m.MessageID, replyText, true, nil)
@@ -499,6 +532,20 @@ func (h *Handler) handleCallbackQuery(cq *CallbackQuery) {
 		switch parts[1] {
 		case "manage":
 			h.sendBotDashboard(cq.Message.Chat.ID, msgID, targetBotID, lang)
+		case "setmodel":
+			h.sendModelSelection(cq.Message.Chat.ID, msgID, targetBotID, lang)
+		case "savemodel":
+			if len(parts) >= 4 {
+				modelType := parts[3]
+				selectedModel := "openai/gpt-oss-120b"
+				if modelType == "qwen" {
+					selectedModel = "qwen/qwen3-32b"
+				} else if modelType == "llama" {
+					selectedModel = "llama-3.3-70b-versatile"
+				}
+				h.db.SetBotModel(targetBotID, selectedModel)
+				h.sendBotDashboard(cq.Message.Chat.ID, msgID, targetBotID, lang)
+			}
 		case "prompt":
 			text := "📝 **Set System Prompt**\n\nPlease send the new prompt text for this bot."
 			if lang == "id" {

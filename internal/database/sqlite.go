@@ -24,6 +24,7 @@ type ManagedBot struct {
 	Name        string
 	Token    string
 	SystemPrompt string
+	Model        string
 }
 
 func New(dbURL string) *DB {
@@ -77,6 +78,7 @@ func New(dbURL string) *DB {
 	_, _ = conn.Exec(`ALTER TABLE managed_bots ADD COLUMN owner_id INTEGER DEFAULT 0;`)
 	_, _ = conn.Exec(`ALTER TABLE users ADD COLUMN encrypted_api_keys TEXT DEFAULT '';`)
 	_, _ = conn.Exec(`ALTER TABLE users ADD COLUMN premium_until DATETIME;`)
+	_, _ = conn.Exec(`ALTER TABLE managed_bots ADD COLUMN model TEXT DEFAULT 'openai/gpt-oss-120b';`)
 
 	log.Println("Database connection established and tables verified")
 	return &DB{Conn: conn}
@@ -179,7 +181,7 @@ func (db *DB) ClearChatHistory(botID int64, chatID int64, threadID int) error {
 }
 
 func (db *DB) SaveManagedBot(botID int64, ownerID int64, username string, name string, token string) {
-	query := `INSERT INTO managed_bots (bot_id, owner_id, username, name, token) VALUES (?, ?, ?, ?, ?) ON CONFLICT(bot_id) DO UPDATE SET token = ?, username = ?, name = ?, owner_id = ?;`
+	query := `INSERT INTO managed_bots (bot_id, owner_id, username, name, token, model) VALUES (?, ?, ?, ?, ?, 'openai/gpt-oss-120b') ON CONFLICT(bot_id) DO UPDATE SET token = ?, username = ?, name = ?, owner_id = ?;`
 	_, err := db.Conn.Exec(query, botID, ownerID, username, name, token, token, username, name, ownerID)
 	if err != nil {
 		log.Printf("Failed to save managed bot: %v\n", err)
@@ -188,10 +190,10 @@ func (db *DB) SaveManagedBot(botID int64, ownerID int64, username string, name s
 
 func (db *DB) GetManagedBot(botID int64) *ManagedBot {
 	var bot ManagedBot
-	var prompt sql.NullString
+	var prompt, model sql.NullString
 	
-	query := `SELECT bot_id, owner_id, username, name, token, system_prompt FROM managed_bots WHERE bot_id = ?;`
-	err := db.Conn.QueryRow(query, botID).Scan(&bot.BotID, &bot.OwnerID, &bot.Username, &bot.Name, &bot.Token, &prompt)
+	query := `SELECT bot_id, owner_id, username, name, token, system_prompt, model FROM managed_bots WHERE bot_id = ?;`
+	err := db.Conn.QueryRow(query, botID).Scan(&bot.BotID, &bot.OwnerID, &bot.Username, &bot.Name, &bot.Token, &prompt, &model)
 	if err != nil {
 		return nil
 	}
@@ -201,8 +203,25 @@ func (db *DB) GetManagedBot(botID int64) *ManagedBot {
 	} else {
 		bot.SystemPrompt = ""
 	}
+
+	if model.Valid && model.String != "" {
+		bot.Model = model.String
+	} else {
+		bot.Model = "openai/gpt-oss-120b"
+	}
 	
 	return &bot
+}
+
+func (db *DB) SetBotModel(botID int64, model string) bool {
+	query := `UPDATE managed_bots SET model = ? WHERE bot_id = ?;`
+	res, err := db.Conn.Exec(query, model, botID)
+	if err != nil {
+		log.Printf("Failed to set bot model: %v\n", err)
+		return false
+	}
+	rows, _ := res.RowsAffected()
+	return rows > 0
 }
 
 func (db *DB) DeleteManagedBot(botID int64, ownerID int64) bool {
