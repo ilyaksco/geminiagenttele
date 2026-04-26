@@ -42,9 +42,17 @@
   "btn_api_gemini": "🔑 Set Gemini API",
   "api_select_msg": "Pilih penyedia layanan API mana yang ingin Anda atur kuncinya:",
   "set_gemini_api_instruction": "**Pengaturan Gemini API Key**\n\nAPI key Anda saat ini: \n`%s`\n\n**Silakan balas dengan mengetikkan API key Gemini baru Anda secara langsung.**\nAnda bisa menggunakan lebih dari satu kunci dengan memisahkannya pakai koma.\n\nTekan **Batal** untuk membatalkan.",
-  "api_gemini_tutorial_title": "**Cara Mendapatkan API Key Gemini**",
+  "api_gemini_tutorial_title": "Cara Mendapatkan API Key Gemini",
   "api_gemini_tutorial_steps": "1. Buka **Google AI Studio** dengan menekan tombol di bawah.\n2. Login dengan akun Google Anda.\n3. Klik **Get API Key** lalu **Create API Key**.\n4. Salin kuncinya dan tempel di chat ini.",
   "btn_open_gemini": "🌐 Buka Google AI Studio",
   "missing_gemini_api_key": "⚠️ Pemilik bot ini belum mengatur API Key Gemini mereka.",
-  "models_list": "qwen|Qwen 3 (32B)|qwen/qwen3-32b,gptoss|GPT OSS (120B)|openai/gpt-oss-120b,llama|LLaMA 3.3 (70B)|llama-3.3-70b-versatile,geminiflash|Gemini 3.1 Flash Lite|gemini/gemini-3.1-flash-lite-preview"
+  "models_list": "qwen|Qwen 3 (32B)|qwen/qwen3-32b,gptoss|GPT OSS (120B)|openai/gpt-oss-120b,llama|LLaMA 3.3 (70B)|llama-3.3-70b-versatile,geminiflash|Gemini 3.1 Flash Lite|gemini/gemini-3.1-flash-lite-preview",
+  "prompt_saved_success": "✅ **System Prompt berhasil diperbarui!**",
+  "model_group_gemini": "Model Gemini",
+  "model_group_groq": "Model Groq",
+  "api_key_required_alert": "⚠️ **Akses Ditolak!**\n\nAnda belum mengatur API Key untuk layanan ini. Silakan kembali ke menu utama dan atur API Key terlebih dahulu sebelum memilih model ini.",
+  "btn_back_to_dashboard": "🔙 Kembali ke Dashboard",
+
+  "provider_select_msg": "⚙️ **Pilih Penyedia Layanan AI**\n\nLayanan mana yang ingin Anda gunakan untuk bot ini?",
+  "model_select_msg": "⚙️ **Pilih Model AI**\n\nPilih model spesifik dari layanan yang Anda pilih:"
 }

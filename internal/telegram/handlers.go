@@ -638,30 +638,53 @@ func (h *Handler) sendApiSelectionMenu(chatID int64, msgID int, lang string) {
 }
 
 func (h *Handler) sendModelSelection(chatID int64, msgID int, botID int64, lang string) {
-	text := "⚙️ **Select AI Model**"
-	if lang == "id" {
-		text = "⚙️ **Pilih Model AI**"
+	text := h.i18n.Get(lang, "provider_select_msg")
+	if text == "provider_select_msg" {
+		text = "⚙️ **Select AI Provider**"
+	}
+
+	btnGroq := h.i18n.Get(lang, "model_group_groq")
+	btnGemini := h.i18n.Get(lang, "model_group_gemini")
+
+	markup := InlineKeyboardMarkup{
+		InlineKeyboard: [][]InlineKeyboardButton{
+			{{Text: btnGroq, CallbackData: fmt.Sprintf("bot_providermodel_%d_groq", botID)}},
+			{{Text: btnGemini, CallbackData: fmt.Sprintf("bot_providermodel_%d_gemini", botID)}},
+			{{Text: "🔙", CallbackData: fmt.Sprintf("bot_manage_%d", botID)}},
+		},
+	}
+	h.editMsg(chatID, msgID, text, true, markup)
+}
+
+func (h *Handler) sendModelListByProvider(chatID int64, msgID int, botID int64, provider string, lang string) {
+	text := h.i18n.Get(lang, "model_select_msg")
+	if text == "model_select_msg" {
+		text = "⚙️ **Select AI Model**"
 	}
 
 	modelDataStr := h.i18n.Get(lang, "models_list")
 	modelList := strings.Split(modelDataStr, ",")
 
 	var buttons [][]InlineKeyboardButton
+
 	for _, m := range modelList {
 		parts := strings.Split(m, "|")
 		if len(parts) == 3 {
 			shortcode := parts[0]
 			displayName := parts[1]
-			buttons = append(buttons, []InlineKeyboardButton{{Text: displayName, CallbackData: fmt.Sprintf("bot_savemodel_%d_%s", botID, shortcode)}})
+			actualModel := parts[2]
+
+			isGemini := strings.HasPrefix(actualModel, "gemini/")
+			
+			if (provider == "gemini" && isGemini) || (provider == "groq" && !isGemini) {
+				buttons = append(buttons, []InlineKeyboardButton{{Text: displayName, CallbackData: fmt.Sprintf("bot_savemodel_%d_%s", botID, shortcode)}})
+			}
 		}
 	}
 
-	buttons = append(buttons, []InlineKeyboardButton{{Text: "🔙", CallbackData: fmt.Sprintf("bot_manage_%d", botID)}})
+	buttons = append(buttons, []InlineKeyboardButton{{Text: "🔙", CallbackData: fmt.Sprintf("bot_setmodel_%d", botID)}})
 
-	markup := InlineKeyboardMarkup{
-		InlineKeyboard: buttons,
-	}
-
+	markup := InlineKeyboardMarkup{InlineKeyboard: buttons}
 	h.editMsg(chatID, msgID, text, true, markup)
 }
 
@@ -703,12 +726,13 @@ func (h *Handler) handleMessage(m *Message) {
 			delete(h.userStates, m.From.ID)
 			h.stateMu.Unlock()
 
+			notification := h.i18n.Get(lang, "error_occurred")
 			if success {
-				h.sendMsg(m.Chat.ID, m.MessageThreadID, m.MessageID, "✅", true, nil)
-			} else {
-				h.sendMsg(m.Chat.ID, m.MessageThreadID, m.MessageID, "❌", true, nil)
+				notification = h.i18n.Get(lang, "prompt_saved_success")
 			}
+			
 			h.sendBotDashboard(m.Chat.ID, 0, targetBotID, lang)
+			h.sendMsg(m.Chat.ID, m.MessageThreadID, 0, notification, true, nil)
 			return
 		}
 
@@ -961,17 +985,23 @@ func (h *Handler) handleCallbackQuery(cq *CallbackQuery) {
 		var targetBotID int64
 		fmt.Sscanf(botIDStr, "%d", &targetBotID)
 
+		
 		switch parts[1] {
 		case "manage":
 			h.sendBotDashboard(cq.Message.Chat.ID, msgID, targetBotID, lang)
 		case "setmodel":
 			h.sendModelSelection(cq.Message.Chat.ID, msgID, targetBotID, lang)
+		case "providermodel":
+			if len(parts) >= 4 {
+				provider := parts[3]
+				h.sendModelListByProvider(cq.Message.Chat.ID, msgID, targetBotID, provider, lang)
+			}
 		case "savemodel":
 			if len(parts) >= 4 {
 				shortcode := parts[3]
 				modelDataStr := h.i18n.Get(lang, "models_list")
 				modelList := strings.Split(modelDataStr, ",")
-				selectedModel := "openai/gpt-oss-120b"
+				selectedModel := ""
 				
 				for _, m := range modelList {
 					mParts := strings.Split(m, "|")
@@ -980,9 +1010,35 @@ func (h *Handler) handleCallbackQuery(cq *CallbackQuery) {
 						break
 					}
 				}
-				
-				h.db.SetBotModel(targetBotID, selectedModel)
-				h.sendBotDashboard(cq.Message.Chat.ID, msgID, targetBotID, lang)
+
+				if selectedModel != "" {
+					ownerID := h.db.GetBotOwner(targetBotID)
+					hasKey := false
+					
+					if strings.HasPrefix(selectedModel, "gemini/") {
+						keys := h.db.GetUserGeminiKeys(ownerID)
+						if keys != "" {
+							hasKey = true
+						}
+					} else {
+						keys := h.db.GetUserAPIKeys(ownerID)
+						if keys != "" {
+							hasKey = true
+						}
+					}
+
+					if !hasKey {
+						alertMsg := h.i18n.Get(lang, "api_key_required_alert")
+						markup := InlineKeyboardMarkup{
+							InlineKeyboard: [][]InlineKeyboardButton{{{Text: h.i18n.Get(lang, "btn_back_to_dashboard"), CallbackData: fmt.Sprintf("bot_manage_%d", targetBotID)}}},
+						}
+						h.editMsg(cq.Message.Chat.ID, msgID, alertMsg, true, markup)
+						return
+					}
+
+					h.db.SetBotModel(targetBotID, selectedModel)
+					h.sendBotDashboard(cq.Message.Chat.ID, msgID, targetBotID, lang)
+				}
 			}
 		case "prompt":
 			text := "📝 **Set System Prompt**\n\nPlease send the new prompt text for this bot."
@@ -1054,6 +1110,8 @@ func (h *Handler) handleCallbackQuery(cq *CallbackQuery) {
 		}
 	}
 }
+
+
 
 func (h *Handler) sendMainMenu(chatID int64, threadID int, msgID int, lang string, text string) {
 	btnCreate := h.i18n.Get(lang, "btn_create")

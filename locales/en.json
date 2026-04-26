@@ -42,9 +42,17 @@
   "btn_api_gemini": "🔑 Set Gemini API",
   "api_select_msg": "Select which API provider you want to set the key for:",
   "set_gemini_api_instruction": "**Gemini API Key Setup**\n\nYour current API keys: \n`%s`\n\n**Please reply by typing your new Gemini API keys directly.**\nYou can use multiple keys by separating them with commas.\n\nPress **Cancel** to abort.",
-  "api_gemini_tutorial_title": "**How to Get Gemini API Key**",
+  "api_gemini_tutorial_title": "How to Get Gemini API Key",
   "api_gemini_tutorial_steps": "1. Visit **Google AI Studio** by clicking the button below.\n2. Login with your Google account.\n3. Click **Get API Key** and then **Create API Key**.\n4. Copy the key and paste it in this chat.",
   "btn_open_gemini": "🌐 Open Google AI Studio",
   "missing_gemini_api_key": "⚠️ The owner of this bot hasn't set up their Gemini API Keys yet.",
-  "models_list": "qwen|Qwen 3 (32B)|qwen/qwen3-32b,gptoss|GPT OSS (120B)|openai/gpt-oss-120b,llama|LLaMA 3.3 (70B)|llama-3.3-70b-versatile,geminiflash|Gemini 3.1 Flash Lite|gemini/gemini-3.1-flash-lite-preview"
+  "models_list": "qwen|Qwen 3 (32B)|qwen/qwen3-32b,gptoss|GPT OSS (120B)|openai/gpt-oss-120b,llama|LLaMA 3.3 (70B)|llama-3.3-70b-versatile,geminiflash|Gemini 3.1 Flash Lite|gemini/gemini-3.1-flash-lite-preview",
+  "prompt_saved_success": "✅ **System Prompt updated successfully!**",
+  "model_group_gemini": "Gemini Models",
+  "model_group_groq": "Groq",
+  "api_key_required_alert": "⚠️ **Access Denied!**\n\nYou haven't set the API Key for this service yet. Please return to the main menu and set the API Key before selecting this model.",
+  "btn_back_to_dashboard": "🔙 Back to Dashboard",
+
+  "provider_select_msg": "⚙️ **Select AI Provider**\n\nWhich service do you want to use for this bot?",
+  "model_select_msg": "⚙️ **Select AI Model**\n\nChoose a specific model from the selected service:"
 }
