@@ -26,6 +26,7 @@ type Handler struct {
 	OnDeleteBot   func(botID int64)
 	userStates    map[int64]string
 	stateMu       sync.RWMutex
+	botTracker    *BotTracker
 }
 
 func NewHandler(tg *Client, db *database.DB, llm *groq.Client, i18n *i18n.I18n, premiumCfg *config.PremiumConfig, botUser *User, encryptionKey string, isManager bool, onNewBot func(botID int64, token string)) *Handler {
@@ -40,6 +41,7 @@ func NewHandler(tg *Client, db *database.DB, llm *groq.Client, i18n *i18n.I18n, 
 		IsManager:     isManager,
 		OnNewBot:      onNewBot,
 		userStates:    make(map[int64]string),
+		botTracker:    NewBotTracker(),
 	}
 }
 
@@ -229,7 +231,7 @@ func (h *Handler) handleMessage(m *Message) {
 			h.stateMu.Lock()
 			delete(h.userStates, m.From.ID)
 			h.stateMu.Unlock()
-			
+
 			h.sendMainMenu(m.Chat.ID, m.MessageThreadID, 0, lang, h.i18n.Get(lang, "welcome"))
 			return
 		}
@@ -310,16 +312,21 @@ func (h *Handler) handleMessage(m *Message) {
 	}
 	isReplyToMe := h.BotUser != nil && m.ReplyToMessage != nil && m.ReplyToMessage.From.ID == h.BotUser.ID
 
-	// BLOK KHUSUS BOT AI (CLONE)
 	if isPrivate || isMentioned || isReplyToMe {
-		
-		// CEK GHOST INSTANCE: Jika bot sudah dihapus dari DB, abaikan semua pesan
+
 		ownerID := h.db.GetBotOwner(h.BotUser.ID)
 		if ownerID == 0 && !h.IsManager {
 			return
 		}
 
-		// LOGIKA START
+		if m.From.IsBot {
+			if !h.botTracker.AllowBotInteraction(m.Chat.ID, m.From.ID) {
+				return
+			}
+		} else {
+			h.botTracker.ResetChain(m.Chat.ID)
+		}
+
 		if strings.HasPrefix(m.Text, "/start") {
 			msg := fmt.Sprintf("Hello, I am **%s**! How can I help you today?", h.BotUser.FirstName)
 			if lang == "id" {
@@ -329,7 +336,6 @@ func (h *Handler) handleMessage(m *Message) {
 			return
 		}
 
-		// LOGIKA NEWCHAT (Hapus Ingatan) HARUS DI SINI
 		if strings.HasPrefix(m.Text, "/newchat") {
 			err := h.db.ClearChatHistory(h.BotUser.ID, m.Chat.ID, m.MessageThreadID)
 			if err != nil {
@@ -337,12 +343,11 @@ func (h *Handler) handleMessage(m *Message) {
 			} else {
 				h.sendMsg(m.Chat.ID, m.MessageThreadID, m.MessageID, h.i18n.Get(lang, "chat_cleared"), true, nil)
 			}
-			return // Return ini mencegah pesan diteruskan ke AI
+			return
 		}
 
-		// PROSES PENGIRIMAN KE AI GROQ
 		h.tg.SendChatAction(SendChatActionReq{ChatID: m.Chat.ID, MessageThreadID: m.MessageThreadID, Action: "typing"})
-		
+
 		encryptedKeys := h.db.GetUserAPIKeys(ownerID)
 		decryptedKeys := ""
 		if encryptedKeys != "" {
@@ -359,21 +364,29 @@ func (h *Handler) handleMessage(m *Message) {
 			h.sendMsg(m.Chat.ID, m.MessageThreadID, m.MessageID, h.i18n.Get(lang, "missing_api_key"), true, nil)
 			return
 		}
-		
-		// Simpan pesan user
-		h.db.SaveMessage(h.BotUser.ID, m.Chat.ID, m.MessageThreadID, "user", m.Text)
-		
-		// Ambil sejarah obrolan (maksimal 6 pesan terakhir)
+
+		fullMessage := m.Text
+		if m.ReplyToMessage != nil && m.ReplyToMessage.Text != "" {
+			targetName := m.ReplyToMessage.From.Username
+			if targetName != "" {
+				targetName = "@" + targetName
+			} else {
+				targetName = m.ReplyToMessage.From.FirstName
+			}
+
+			fullMessage = fmt.Sprintf("[Context - Replying to %s's message: \"%s\"]\n\n%s", targetName, m.ReplyToMessage.Text, m.Text)
+		}
+
+		h.db.SaveMessage(h.BotUser.ID, m.Chat.ID, m.MessageThreadID, "user", fullMessage)
+
 		rawHistory := h.db.GetHistory(h.BotUser.ID, m.Chat.ID, m.MessageThreadID, 6)
-		llmHistory := buildGroqHistory(rawHistory, m.Text)
+		llmHistory := buildGroqHistory(rawHistory, fullMessage)
 		systemPrompt := h.db.GetBotPrompt(h.BotUser.ID)
-		
-		// Generate jawaban AI
+
 		replyText, err := h.llm.GenerateChat(validKeys, systemPrompt, llmHistory)
 		if err != nil {
 			replyText = h.i18n.Get(lang, "error_occurred")
 		} else {
-			// Simpan jawaban AI
 			h.db.SaveMessage(h.BotUser.ID, m.Chat.ID, m.MessageThreadID, "assistant", replyText)
 		}
 		h.sendMsg(m.Chat.ID, m.MessageThreadID, m.MessageID, replyText, true, nil)

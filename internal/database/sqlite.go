@@ -40,6 +40,7 @@ func New(dbURL string) *DB {
 	_, _ = conn.Exec("PRAGMA journal_mode=WAL;")
 	_, _ = conn.Exec("PRAGMA synchronous=NORMAL;")
 	_, _ = conn.Exec("PRAGMA cache_size=-2000;")
+	_, _ = conn.Exec("PRAGMA busy_timeout=5000;")
 
 	queries := []string{
 		`CREATE TABLE IF NOT EXISTS users (
