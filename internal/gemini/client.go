@@ -37,10 +37,16 @@ type GenerationConfig struct {
 	ThinkingConfig *ThinkingConfig `json:"thinkingConfig,omitempty"`
 }
 
+type SafetySetting struct {
+	Category  string `json:"category"`
+	Threshold string `json:"threshold"`
+}
+
 type ChatRequest struct {
 	SystemInstruction *SystemInstruction `json:"systemInstruction,omitempty"`
 	Contents          []Message          `json:"contents"`
 	GenerationConfig  *GenerationConfig  `json:"generationConfig,omitempty"`
+	SafetySettings    []SafetySetting    `json:"safetySettings,omitempty"`
 }
 
 type ChatResponse struct {
@@ -84,6 +90,12 @@ func (c *Client) GenerateChat(apiKeys []string, systemPrompt string, history []M
 
 	reqBody := ChatRequest{
 		Contents: history,
+		SafetySettings: []SafetySetting{
+			{Category: "HARM_CATEGORY_HARASSMENT", Threshold: "BLOCK_NONE"},
+			{Category: "HARM_CATEGORY_HATE_SPEECH", Threshold: "BLOCK_NONE"},
+			{Category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", Threshold: "BLOCK_NONE"},
+			{Category: "HARM_CATEGORY_DANGEROUS_CONTENT", Threshold: "BLOCK_NONE"},
+		},
 	}
 
 	if systemPrompt != "" {

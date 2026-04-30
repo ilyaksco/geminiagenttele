@@ -8,6 +8,7 @@ import (
 	"gemini-agent/internal/gemini"
 	"gemini-agent/internal/groq"
 	"gemini-agent/internal/i18n"
+	"gemini-agent/internal/tavily"
 	"log"
 	"regexp"
 	"strings"
@@ -624,6 +625,7 @@ func (h *Handler) sendApiSelectionMenu(chatID int64, msgID int, lang string) {
 	text := h.i18n.Get(lang, "api_select_msg")
 	btnGroq := h.i18n.Get(lang, "btn_api_groq")
 	btnGemini := h.i18n.Get(lang, "btn_api_gemini")
+	btnTavily := "🌐 Set Tavily API"
 	btnBack := "🔙"
 
 	// PEMBARUAN: Menghilangkan underscore agar tidak pecah saat di-Split
@@ -631,6 +633,7 @@ func (h *Handler) sendApiSelectionMenu(chatID int64, msgID int, lang string) {
 		InlineKeyboard: [][]InlineKeyboardButton{
 			{{Text: btnGroq, CallbackData: "action_setapigroq"}},
 			{{Text: btnGemini, CallbackData: "action_setapigemini"}},
+			{{Text: btnTavily, CallbackData: "action_setapitavily"}},
 			{{Text: btnBack, CallbackData: "action_back"}},
 		},
 	}
@@ -688,6 +691,7 @@ func (h *Handler) sendModelListByProvider(chatID int64, msgID int, botID int64, 
 	h.editMsg(chatID, msgID, text, true, markup)
 }
 
+// (pembaruan 16)
 func (h *Handler) handleMessage(m *Message) {
 	lang := h.db.GetUserLang(m.From.ID)
 
@@ -722,6 +726,7 @@ func (h *Handler) handleMessage(m *Message) {
 			fmt.Sscanf(botIDStr, "%d", &targetBotID)
 
 			success := h.db.SetBotPrompt(targetBotID, m.Text)
+
 			h.stateMu.Lock()
 			delete(h.userStates, m.From.ID)
 			h.stateMu.Unlock()
@@ -729,14 +734,13 @@ func (h *Handler) handleMessage(m *Message) {
 			notification := h.i18n.Get(lang, "error_occurred")
 			if success {
 				notification = h.i18n.Get(lang, "prompt_saved_success")
+				h.sendBotDashboard(m.Chat.ID, 0, targetBotID, lang)
 			}
-			
-			h.sendBotDashboard(m.Chat.ID, 0, targetBotID, lang)
 			h.sendMsg(m.Chat.ID, m.MessageThreadID, 0, notification, true, nil)
 			return
 		}
 
-		if state == "awaiting_api_key_groq" || state == "awaiting_api_key_gemini" {
+		if state == "awaiting_api_key_groq" || state == "awaiting_api_key_gemini" || state == "awaiting_api_key_tavily" {
 			rawKeys := strings.ReplaceAll(m.Text, " ", "")
 			encrypted, err := crypto.Encrypt(rawKeys, h.EncryptionKey)
 			var menuText string
@@ -747,10 +751,12 @@ func (h *Handler) handleMessage(m *Message) {
 			} else {
 				if state == "awaiting_api_key_groq" {
 					h.db.SetUserAPIKeys(m.From.ID, encrypted)
-				} else {
+				} else if state == "awaiting_api_key_gemini" {
 					h.db.SetUserGeminiKeys(m.From.ID, encrypted)
+				} else {
+					h.db.SetUserTavilyKeys(m.From.ID, encrypted)
 				}
-				
+
 				if lang == "id" {
 					menuText = "✅ **API Key berhasil disimpan!**\n\n" + h.i18n.Get(lang, "welcome")
 				} else {
@@ -810,6 +816,7 @@ func (h *Handler) handleMessage(m *Message) {
 			}
 			targetUsername := strings.TrimSpace(strings.TrimPrefix(parts[1], "@"))
 			promptText := strings.TrimSpace(parts[2])
+
 			success := h.db.SetBotPromptByOwner(m.From.ID, targetUsername, promptText)
 			if success {
 				h.sendMsg(m.Chat.ID, m.MessageThreadID, m.MessageID, "✅", true, nil)
@@ -829,7 +836,7 @@ func (h *Handler) handleMessage(m *Message) {
 			return
 		}
 
-		h.sendMsg(m.Chat.ID, m.MessageThreadID, m.MessageID, "⚠️ /start", true, nil)
+		h.sendMsg(m.Chat.ID, m.MessageThreadID, m.MessageID, "ℹ️ /start", true, nil)
 		return
 	}
 
@@ -841,7 +848,6 @@ func (h *Handler) handleMessage(m *Message) {
 	isReplyToMe := h.BotUser != nil && m.ReplyToMessage != nil && m.ReplyToMessage.From.ID == h.BotUser.ID
 
 	if isPrivate || isMentioned || isReplyToMe {
-
 		ownerID := h.db.GetBotOwner(h.BotUser.ID)
 		if ownerID == 0 && !h.IsManager {
 			return
@@ -895,13 +901,30 @@ func (h *Handler) handleMessage(m *Message) {
 		}
 
 		h.db.SaveMessage(h.BotUser.ID, m.Chat.ID, m.MessageThreadID, "user", fullMessage)
+
 		rawHistory := h.db.GetHistory(h.BotUser.ID, m.Chat.ID, m.MessageThreadID, 6)
 		systemPrompt := h.db.GetBotPrompt(h.BotUser.ID)
+
+		useSearch := strings.Contains(systemPrompt, "{search}")
+		useReact := strings.Contains(systemPrompt, "{react}")
+		actualPrompt := systemPrompt
+		if useSearch {
+			searchInstruction := "\n\n[SYSTEM INSTRUCTION: You have access to a real-time web search. If you absolutely need to search the internet to answer the user's latest message, DO NOT answer normally. Instead, reply EXACTLY and ONLY with the format: [SEARCH: your search query here]. If you do not need to search, answer the user normally based on your persona.]"
+			actualPrompt = strings.Replace(systemPrompt, "{search}", searchInstruction, 1)
+		}
+
+		if useReact {
+			reactInstruction := "\n\n[SYSTEM INSTRUCTION: You can express emotions by reacting to the user's message. If the user's message evokes a strong emotion (e.g., funny, sad, angry, love, agreement), you MUST start your response EXACTLY with the format: [REACT: emoji]. Use ONLY ONE standard Telegram emoji. Example: [REACT: 🤣]. If no strong reaction is needed, do not include this tag.]"
+			actualPrompt = strings.Replace(actualPrompt, "{react}", reactInstruction, 1)
+		}
 
 		var replyText string
 		var err error
 
-		if strings.HasPrefix(model, "gemini/") {
+		isGemini := strings.HasPrefix(model, "gemini/")
+		var validKeys []string
+
+		if isGemini {
 			geminiModel := strings.TrimPrefix(model, "gemini/")
 			encryptedKeys := h.db.GetUserGeminiKeys(ownerID)
 			decryptedKeys := ""
@@ -909,20 +932,19 @@ func (h *Handler) handleMessage(m *Message) {
 				decryptedKeys, _ = crypto.Decrypt(encryptedKeys, h.EncryptionKey)
 			}
 			apiKeys := strings.Split(decryptedKeys, ",")
-			var validKeys []string
 			for _, k := range apiKeys {
 				if k != "" {
 					validKeys = append(validKeys, k)
 				}
 			}
+
 			if len(validKeys) == 0 {
 				h.sendMsg(m.Chat.ID, m.MessageThreadID, m.MessageID, h.i18n.Get(lang, "missing_gemini_api_key"), true, nil)
 				return
 			}
-			
-			llmHistory := buildGeminiHistory(rawHistory, fullMessage)
-			replyText, err = h.gemini.GenerateChat(validKeys, systemPrompt, llmHistory, geminiModel)
 
+			llmHistory := buildGeminiHistory(rawHistory, fullMessage)
+			replyText, err = h.gemini.GenerateChat(validKeys, actualPrompt, llmHistory, geminiModel)
 		} else {
 			encryptedKeys := h.db.GetUserAPIKeys(ownerID)
 			decryptedKeys := ""
@@ -930,19 +952,89 @@ func (h *Handler) handleMessage(m *Message) {
 				decryptedKeys, _ = crypto.Decrypt(encryptedKeys, h.EncryptionKey)
 			}
 			apiKeys := strings.Split(decryptedKeys, ",")
-			var validKeys []string
 			for _, k := range apiKeys {
 				if k != "" {
 					validKeys = append(validKeys, k)
 				}
 			}
+
 			if len(validKeys) == 0 {
 				h.sendMsg(m.Chat.ID, m.MessageThreadID, m.MessageID, h.i18n.Get(lang, "missing_api_key"), true, nil)
 				return
 			}
 
 			llmHistory := buildGroqHistory(rawHistory, fullMessage)
-			replyText, err = h.llm.GenerateChat(validKeys, systemPrompt, llmHistory, model)
+			replyText, err = h.llm.GenerateChat(validKeys, actualPrompt, llmHistory, model)
+		}
+
+		if err == nil && useSearch {
+			reSearch := regexp.MustCompile(`\[SEARCH:\s*(.*?)\]`)
+			if reSearch.MatchString(replyText) {
+				matches := reSearch.FindStringSubmatch(replyText)
+				searchQuery := matches[1]
+
+				log.Printf("Intercepted Search Request: %s\n", searchQuery)
+
+				encryptedTavily := h.db.GetUserTavilyKeys(ownerID)
+				decryptedTavily, _ := crypto.Decrypt(encryptedTavily, h.EncryptionKey)
+				tavilyKeys := strings.Split(decryptedTavily, ",")
+
+				var validTavilyKeys []string
+				for _, k := range tavilyKeys {
+					if k != "" {
+						validTavilyKeys = append(validTavilyKeys, k)
+					}
+				}
+
+				tavilyClient := tavily.New()
+				tavilyResult, tavilyErr := tavilyClient.Search(validTavilyKeys, searchQuery)
+				if tavilyErr != nil {
+					log.Printf("Tavily search failed: %v\n", tavilyErr)
+					tavilyResult = "Web search failed or no API key available. Inform the user you couldn't search the web."
+				}
+
+				secondPassPrompt := actualPrompt + "\n\n[WEB SEARCH RESULTS FOR '" + searchQuery + "']:\n" + tavilyResult + "\n\n[SYSTEM INSTRUCTION: Based on the search results above, answer the user's latest question while strictly staying in your persona.]"
+
+				if isGemini {
+					geminiModel := strings.TrimPrefix(model, "gemini/")
+					llmHistory := buildGeminiHistory(rawHistory, fullMessage)
+					replyText, err = h.gemini.GenerateChat(validKeys, secondPassPrompt, llmHistory, geminiModel)
+				} else {
+					llmHistory := buildGroqHistory(rawHistory, fullMessage)
+					replyText, err = h.llm.GenerateChat(validKeys, secondPassPrompt, llmHistory, model)
+				}
+			}
+		}
+
+
+
+		if err == nil && useReact {
+			reReact := regexp.MustCompile(`\[REACT:\s*(.*?)\s*\]`)
+			if reReact.MatchString(replyText) {
+				// Ambil emojinya
+				matches := reReact.FindStringSubmatch(replyText)
+				emoji := strings.TrimSpace(matches[1])
+
+				// Hapus teks [REACT: emoji] dari balasan agar tidak terlihat oleh user
+				replyText = reReact.ReplaceAllString(replyText, "")
+
+				log.Printf("Intercepted Reaction: %s\n", emoji)
+
+				// Kirim emoji tersebut ke Telegram API (berjalan di background/goroutine agar tidak bikin chat lemot)
+				go func(cID int64, mID int, emo string) {
+					reactReq := SetMessageReactionReq{
+						ChatID:    cID,
+						MessageID: mID,
+						Reaction: []ReactionTypeEmoji{
+							{Type: "emoji", Emoji: emo},
+						},
+					}
+					errReact := h.tg.SetMessageReaction(reactReq)
+					if errReact != nil {
+						log.Printf("Failed to set reaction on chat %d: %v\n", cID, errReact)
+					}
+				}(m.Chat.ID, m.MessageID, emoji)
+			}
 		}
 
 		if err != nil {
@@ -951,8 +1043,10 @@ func (h *Handler) handleMessage(m *Message) {
 			re := regexp.MustCompile(`(?s)<think>.*?</think>`)
 			replyText = re.ReplaceAllString(replyText, "")
 			replyText = strings.TrimSpace(replyText)
-			h.db.SaveMessage(h.BotUser.ID, m.Chat.ID, m.MessageThreadID, "assistant", replyText)
 		}
+
+		h.db.SaveMessage(h.BotUser.ID, m.Chat.ID, m.MessageThreadID, "assistant", replyText)
+		
 		h.sendMsg(m.Chat.ID, m.MessageThreadID, m.MessageID, replyText, true, nil)
 	}
 }
@@ -1111,8 +1205,12 @@ func (h *Handler) handleCallbackQuery(cq *CallbackQuery) {
 			h.sendApiTutorial(cq.Message.Chat.ID, msgID, lang)
 		case "tutorialgemini":
 			h.sendApiGeminiTutorial(cq.Message.Chat.ID, msgID, lang)
+		case "setapitavily":
+			h.handleSetApiFlow(cq.From.ID, cq.Message.Chat.ID, cq.Message.MessageThreadID, msgID, lang, "tavily")
 		case "lang":
 			h.sendLangMenu(cq.Message.Chat.ID, cq.Message.MessageThreadID, msgID, lang)
+		case "tutorialtavily":
+			h.sendApiTavilyTutorial(cq.Message.Chat.ID, msgID, lang)
 		case "premium":
 			h.sendPremiumMenu(cq.Message.Chat.ID, cq.Message.MessageThreadID, msgID, lang)
 		case "back", "cancelapi":
@@ -1165,11 +1263,17 @@ func (h *Handler) handleSetApiFlow(userID int64, chatID int64, threadID int, msg
 		h.stateMu.Lock()
 		h.userStates[userID] = "awaiting_api_key_groq"
 		h.stateMu.Unlock()
-	} else {
+	} else if provider == "gemini" {
 		encryptedKeys = h.db.GetUserGeminiKeys(userID)
 		btnTutorial = h.i18n.Get(lang, "api_gemini_tutorial_title")
 		h.stateMu.Lock()
 		h.userStates[userID] = "awaiting_api_key_gemini"
+		h.stateMu.Unlock()
+	} else {
+		encryptedKeys = h.db.GetUserTavilyKeys(userID)
+		btnTutorial = "📖 How to get Tavily API?"
+		h.stateMu.Lock()
+		h.userStates[userID] = "awaiting_api_key_tavily"
 		h.stateMu.Unlock()
 	}
 
@@ -1183,8 +1287,13 @@ func (h *Handler) handleSetApiFlow(userID int64, chatID int64, threadID int, msg
 
 	if provider == "groq" {
 		text = fmt.Sprintf(h.i18n.Get(lang, "set_api_instruction"), currentKeys)
-	} else {
+	} else if provider == "gemini" {
 		text = fmt.Sprintf(h.i18n.Get(lang, "set_gemini_api_instruction"), currentKeys)
+	} else {
+		text = fmt.Sprintf("**Tavily API Key Setup**\n\nYour current API keys:\n`%s`\n\n**Please reply by typing your new Tavily API keys.**\nYou can separate multiple keys with commas or newlines.\n\nPress **Cancel** to abort.", currentKeys)
+		if lang == "id" {
+			text = fmt.Sprintf("**Pengaturan API Key Tavily**\n\nAPI key Anda saat ini:\n`%s`\n\n**Silakan balas dengan mengetikkan API key Tavily baru Anda.**\nBisa lebih dari satu, pisahkan dengan koma atau enter.\n\nTekan **Batal** untuk membatalkan.", currentKeys)
+		}
 	}
 
 	btnCancel := h.i18n.Get(lang, "btn_cancel")
@@ -1192,6 +1301,8 @@ func (h *Handler) handleSetApiFlow(userID int64, chatID int64, threadID int, msg
 	tutorialCallback := "action_tutorialapi"
 	if provider == "gemini" {
 		tutorialCallback = "action_tutorialgemini"
+	} else if provider == "tavily" {
+		tutorialCallback = "action_tutorialtavily"
 	}
 
 	markup := InlineKeyboardMarkup{
@@ -1206,6 +1317,28 @@ func (h *Handler) handleSetApiFlow(userID int64, chatID int64, threadID int, msg
 	} else {
 		h.editMsg(chatID, msgID, text, true, markup)
 	}
+}
+
+// (pembaruan 14)
+func (h *Handler) sendApiTavilyTutorial(chatID int64, msgID int, lang string) {
+	fullMsg := "**How to Get Tavily API Key**\n\n1. Visit **tavily.com** by clicking the button below.\n2. Login or Sign Up.\n3. Copy the API key from your dashboard.\n4. Paste it in this chat."
+	if lang == "id" {
+		fullMsg = "**Cara Mendapatkan API Key Tavily**\n\n1. Buka **tavily.com** dengan tombol di bawah.\n2. Login atau Daftar.\n3. Salin API key dari dashboard.\n4. Tempel (Paste) kuncinya di chat ini."
+	}
+	btnOpen := "🌐 Open Tavily"
+	btnBack := "🔙 Back"
+	if lang == "id" {
+		btnBack = "🔙 Kembali"
+	}
+
+	markup := InlineKeyboardMarkup{
+		InlineKeyboard: [][]InlineKeyboardButton{
+			{{Text: btnOpen, URL: "https://tavily.com/"}},
+			{{Text: btnBack, CallbackData: "action_setapitavily"}},
+		},
+	}
+
+	h.editMsg(chatID, msgID, fullMsg, true, markup)
 }
 
 func (h *Handler) sendApiGeminiTutorial(chatID int64, msgID int, lang string) {

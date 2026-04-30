@@ -102,6 +102,41 @@ type InlineKeyboardButton struct {
 	URL          string `json:"url,omitempty"`
 }
 
+
+// (pembaruan 17)
+type ReactionTypeEmoji struct {
+	Type  string `json:"type"`
+	Emoji string `json:"emoji"`
+}
+
+type SetMessageReactionReq struct {
+	ChatID    int64               `json:"chat_id"`
+	MessageID int                 `json:"message_id"`
+	Reaction  []ReactionTypeEmoji `json:"reaction"`
+	IsBig     bool                `json:"is_big,omitempty"`
+}
+
+func (c *Client) SetMessageReaction(req SetMessageReactionReq) error {
+	url := fmt.Sprintf("%s/setMessageReaction", c.baseURL)
+	jsonData, _ := json.Marshal(req)
+
+	resp, err := c.httpClient.Post(url, "application/json", bytes.NewBuffer(jsonData))
+	if err != nil {
+		log.Printf("Error sending message reaction: %v\n", err)
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		err := fmt.Errorf("telegram reaction returned status %d: %s", resp.StatusCode, string(body))
+		log.Printf("%v\n", err)
+		return err
+	}
+
+	return nil
+}
+
 func NewClient(token string) *Client {
 	return &Client{
 		token:   token,

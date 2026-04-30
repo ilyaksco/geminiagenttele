@@ -27,6 +27,7 @@ type ManagedBot struct {
 	Model        string
 }
 
+// (pembaruan 7)
 func New(dbURL string) *DB {
 	conn, err := sql.Open("sqlite", dbURL)
 	if err != nil {
@@ -78,6 +79,7 @@ func New(dbURL string) *DB {
 	_, _ = conn.Exec(`ALTER TABLE managed_bots ADD COLUMN owner_id INTEGER DEFAULT 0;`)
 	_, _ = conn.Exec(`ALTER TABLE users ADD COLUMN encrypted_api_keys TEXT DEFAULT '';`)
 	_, _ = conn.Exec(`ALTER TABLE users ADD COLUMN encrypted_gemini_keys TEXT DEFAULT '';`)
+	_, _ = conn.Exec(`ALTER TABLE users ADD COLUMN encrypted_tavily_keys TEXT DEFAULT '';`)
 	_, _ = conn.Exec(`ALTER TABLE users ADD COLUMN premium_until DATETIME;`)
 	_, _ = conn.Exec(`ALTER TABLE managed_bots ADD COLUMN model TEXT DEFAULT 'openai/gpt-oss-120b';`)
 
@@ -373,3 +375,26 @@ func (db *DB) GetManagedBots() []ManagedBot {
 }
 
 // --- TAMBAHKAN DI BAGIAN PALING BAWAH FILE internal/database/sqlite.go ---
+
+// (pembaruan 8)
+func (db *DB) SetUserTavilyKeys(userID int64, encryptedKeys string) {
+	query := `INSERT INTO users (id, encrypted_tavily_keys) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET encrypted_tavily_keys = ?;`
+	_, err := db.Conn.Exec(query, userID, encryptedKeys, encryptedKeys)
+	if err != nil {
+		log.Printf("Failed to save user Tavily keys: %v\n", err)
+	}
+}
+
+// (pembaruan 9)
+func (db *DB) GetUserTavilyKeys(userID int64) string {
+	var keys sql.NullString
+	query := `SELECT encrypted_tavily_keys FROM users WHERE id = ?;`
+	err := db.Conn.QueryRow(query, userID).Scan(&keys)
+	if err != nil {
+		return ""
+	}
+	if keys.Valid {
+		return keys.String
+	}
+	return ""
+}
