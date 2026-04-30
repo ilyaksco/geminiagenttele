@@ -875,13 +875,23 @@ func (h *Handler) handleMessage(m *Message) {
 			model = botData.Model
 		}
 
-		fullMessage := m.Text
+		senderName := m.From.FirstName
+		senderUsername := m.From.Username
+		userLabel := ""
+		if senderUsername != "" {
+			userLabel = fmt.Sprintf("[User: %s (@%s)]", senderName, senderUsername)
+		} else {
+			userLabel = fmt.Sprintf("[User: %s]", senderName)
+		}
+
+		fullMessage := fmt.Sprintf("%s %s", userLabel, m.Text)
+
 		if m.ReplyToMessage != nil && m.ReplyToMessage.Text != "" {
 			targetName := m.ReplyToMessage.From.Username
 			if targetName == "" {
 				targetName = m.ReplyToMessage.From.FirstName
 			}
-			fullMessage = fmt.Sprintf("[Context - Replying to @%s: \"%s\"]\n\n%s", targetName, m.ReplyToMessage.Text, m.Text)
+			fullMessage = fmt.Sprintf("[Context - Replying to @%s: \"%s\"]\n\n%s", targetName, m.ReplyToMessage.Text, fullMessage)
 		}
 
 		h.db.SaveMessage(h.BotUser.ID, m.Chat.ID, m.MessageThreadID, "user", fullMessage)

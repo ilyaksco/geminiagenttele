@@ -85,9 +85,10 @@ func New(dbURL string) *DB {
 	return &DB{Conn: conn}
 }
 
+// (pembaruan 1)
 func (db *DB) SetUserGeminiKeys(userID int64, encryptedKeys string) {
-	query := `UPDATE users SET encrypted_gemini_keys = ? WHERE id = ?;`
-	_, err := db.Conn.Exec(query, encryptedKeys, userID)
+	query := `INSERT INTO users (id, encrypted_gemini_keys) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET encrypted_gemini_keys = ?;`
+	_, err := db.Conn.Exec(query, userID, encryptedKeys, encryptedKeys)
 	if err != nil {
 		log.Printf("Failed to save user Gemini keys: %v\n", err)
 	}
@@ -372,4 +373,3 @@ func (db *DB) GetManagedBots() []ManagedBot {
 }
 
 // --- TAMBAHKAN DI BAGIAN PALING BAWAH FILE internal/database/sqlite.go ---
-
