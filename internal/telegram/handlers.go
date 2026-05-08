@@ -54,6 +54,8 @@ func (h *Handler) HandleUpdate(u Update) {
 		go h.handleManagedBotUpdate(u.ManagedBot)
 	} else if u.PreCheckoutQuery != nil {
 		go h.handlePreCheckoutQuery(u.PreCheckoutQuery)
+	} else if u.GuestMessage != nil {
+		go h.handleMessage(u.GuestMessage)
 	} else if u.Message != nil {
 		go h.handleMessage(u.Message)
 	} else if u.CallbackQuery != nil {
@@ -691,6 +693,60 @@ func (h *Handler) sendModelListByProvider(chatID int64, msgID int, botID int64, 
 	h.editMsg(chatID, msgID, text, true, markup)
 }
 
+func (h *Handler) sendGuestMsg(queryID string, text string, useHTML bool, markup interface{}) {
+	if useHTML {
+		text = formatToHTML(text)
+	}
+
+	req := AnswerGuestQueryReq{
+		GuestQueryID: queryID,
+		Result: InlineQueryResultArticle{
+			Type:  "article",
+			ID:    queryID,
+			Title: "Response",
+			InputMessageContent: InputTextMessageContent{
+				MessageText: text,
+				ParseMode:   "HTML",
+			},
+			ReplyMarkup: markup,
+		},
+	}
+
+	if !useHTML {
+		req.Result = InlineQueryResultArticle{
+			Type:  "article",
+			ID:    queryID,
+			Title: "Response",
+			InputMessageContent: InputTextMessageContent{
+				MessageText: text,
+				ParseMode:   "",
+			},
+			ReplyMarkup: markup,
+		}
+	}
+
+	_, err := h.tg.AnswerGuestQuery(req)
+	if err != nil && useHTML {
+		log.Printf("Failed to send HTML guest message, falling back to plain text: %v\n", err)
+		
+		rawRunes := []rune(h.stripHTML(text))
+		req.Result = InlineQueryResultArticle{
+			Type:  "article",
+			ID:    queryID,
+			Title: "Response",
+			InputMessageContent: InputTextMessageContent{
+				MessageText: string(rawRunes),
+				ParseMode:   "",
+			},
+			ReplyMarkup: markup,
+		}
+		
+		h.tg.AnswerGuestQuery(req)
+	} else if err != nil {
+		log.Printf("Failed to send guest message: %v\n", err)
+	}
+}
+
 // (pembaruan 16)
 func (h *Handler) handleMessage(m *Message) {
 	lang := h.db.GetUserLang(m.From.ID)
@@ -846,8 +902,9 @@ func (h *Handler) handleMessage(m *Message) {
 		isMentioned = strings.Contains(m.Text, "@"+h.BotUser.Username)
 	}
 	isReplyToMe := h.BotUser != nil && m.ReplyToMessage != nil && m.ReplyToMessage.From.ID == h.BotUser.ID
+	isGuest := m.GuestQueryID != ""
 
-	if isPrivate || isMentioned || isReplyToMe {
+	if isPrivate || isMentioned || isReplyToMe || isGuest {
 		ownerID := h.db.GetBotOwner(h.BotUser.ID)
 		if ownerID == 0 && !h.IsManager {
 			return
@@ -863,17 +920,27 @@ func (h *Handler) handleMessage(m *Message) {
 
 		if strings.HasPrefix(m.Text, "/start") {
 			msg := fmt.Sprintf("Hello, I am **%s**!", h.BotUser.FirstName)
-			h.sendMsg(m.Chat.ID, m.MessageThreadID, m.MessageID, msg, true, nil)
+			if isGuest {
+				h.sendGuestMsg(m.GuestQueryID, msg, true, nil)
+			} else {
+				h.sendMsg(m.Chat.ID, m.MessageThreadID, m.MessageID, msg, true, nil)
+			}
 			return
 		}
 
 		if strings.HasPrefix(m.Text, "/newchat") {
 			_ = h.db.ClearChatHistory(h.BotUser.ID, m.Chat.ID, m.MessageThreadID)
-			h.sendMsg(m.Chat.ID, m.MessageThreadID, m.MessageID, h.i18n.Get(lang, "chat_cleared"), true, nil)
+			if isGuest {
+				h.sendGuestMsg(m.GuestQueryID, h.i18n.Get(lang, "chat_cleared"), true, nil)
+			} else {
+				h.sendMsg(m.Chat.ID, m.MessageThreadID, m.MessageID, h.i18n.Get(lang, "chat_cleared"), true, nil)
+			}
 			return
 		}
 
-		h.tg.SendChatAction(SendChatActionReq{ChatID: m.Chat.ID, MessageThreadID: m.MessageThreadID, Action: "typing"})
+		if !isGuest {
+			h.tg.SendChatAction(SendChatActionReq{ChatID: m.Chat.ID, MessageThreadID: m.MessageThreadID, Action: "typing"})
+		}
 
 		botData := h.db.GetManagedBot(h.BotUser.ID)
 		model := "openai/gpt-oss-120b"
@@ -939,7 +1006,11 @@ func (h *Handler) handleMessage(m *Message) {
 			}
 
 			if len(validKeys) == 0 {
-				h.sendMsg(m.Chat.ID, m.MessageThreadID, m.MessageID, h.i18n.Get(lang, "missing_gemini_api_key"), true, nil)
+				if isGuest {
+					h.sendGuestMsg(m.GuestQueryID, h.i18n.Get(lang, "missing_gemini_api_key"), true, nil)
+				} else {
+					h.sendMsg(m.Chat.ID, m.MessageThreadID, m.MessageID, h.i18n.Get(lang, "missing_gemini_api_key"), true, nil)
+				}
 				return
 			}
 
@@ -959,7 +1030,11 @@ func (h *Handler) handleMessage(m *Message) {
 			}
 
 			if len(validKeys) == 0 {
-				h.sendMsg(m.Chat.ID, m.MessageThreadID, m.MessageID, h.i18n.Get(lang, "missing_api_key"), true, nil)
+				if isGuest {
+					h.sendGuestMsg(m.GuestQueryID, h.i18n.Get(lang, "missing_api_key"), true, nil)
+				} else {
+					h.sendMsg(m.Chat.ID, m.MessageThreadID, m.MessageID, h.i18n.Get(lang, "missing_api_key"), true, nil)
+				}
 				return
 			}
 
@@ -1006,34 +1081,31 @@ func (h *Handler) handleMessage(m *Message) {
 			}
 		}
 
-
-
 		if err == nil && useReact {
 			reReact := regexp.MustCompile(`\[REACT:\s*(.*?)\s*\]`)
 			if reReact.MatchString(replyText) {
-				// Ambil emojinya
 				matches := reReact.FindStringSubmatch(replyText)
 				emoji := strings.TrimSpace(matches[1])
 
-				// Hapus teks [REACT: emoji] dari balasan agar tidak terlihat oleh user
 				replyText = reReact.ReplaceAllString(replyText, "")
 
 				log.Printf("Intercepted Reaction: %s\n", emoji)
 
-				// Kirim emoji tersebut ke Telegram API (berjalan di background/goroutine agar tidak bikin chat lemot)
-				go func(cID int64, mID int, emo string) {
-					reactReq := SetMessageReactionReq{
-						ChatID:    cID,
-						MessageID: mID,
-						Reaction: []ReactionTypeEmoji{
-							{Type: "emoji", Emoji: emo},
-						},
-					}
-					errReact := h.tg.SetMessageReaction(reactReq)
-					if errReact != nil {
-						log.Printf("Failed to set reaction on chat %d: %v\n", cID, errReact)
-					}
-				}(m.Chat.ID, m.MessageID, emoji)
+				if !isGuest {
+					go func(cID int64, mID int, emo string) {
+						reactReq := SetMessageReactionReq{
+							ChatID:    cID,
+							MessageID: mID,
+							Reaction: []ReactionTypeEmoji{
+								{Type: "emoji", Emoji: emo},
+							},
+						}
+						errReact := h.tg.SetMessageReaction(reactReq)
+						if errReact != nil {
+							log.Printf("Failed to set reaction on chat %d: %v\n", cID, errReact)
+						}
+					}(m.Chat.ID, m.MessageID, emoji)
+				}
 			}
 		}
 
@@ -1047,7 +1119,11 @@ func (h *Handler) handleMessage(m *Message) {
 
 		h.db.SaveMessage(h.BotUser.ID, m.Chat.ID, m.MessageThreadID, "assistant", replyText)
 		
-		h.sendMsg(m.Chat.ID, m.MessageThreadID, m.MessageID, replyText, true, nil)
+		if isGuest {
+			h.sendGuestMsg(m.GuestQueryID, replyText, true, nil)
+		} else {
+			h.sendMsg(m.Chat.ID, m.MessageThreadID, m.MessageID, replyText, true, nil)
+		}
 	}
 }
 

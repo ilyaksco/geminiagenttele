@@ -16,12 +16,36 @@ type Client struct {
 	httpClient *http.Client
 }
 
+type SentGuestMessage struct {
+	GuestQueryID string   `json:"guest_query_id"`
+	Message      *Message `json:"message,omitempty"`
+}
+
+type AnswerGuestQueryReq struct {
+	GuestQueryID string      `json:"guest_query_id"`
+	Result       interface{} `json:"result"`
+}
+
+type InlineQueryResultArticle struct {
+	Type                string                  `json:"type"`
+	ID                  string                  `json:"id"`
+	Title               string                  `json:"title"`
+	InputMessageContent InputTextMessageContent `json:"input_message_content"`
+	ReplyMarkup         interface{}             `json:"reply_markup,omitempty"`
+}
+
+type InputTextMessageContent struct {
+	MessageText string `json:"message_text"`
+	ParseMode   string `json:"parse_mode,omitempty"`
+}
+
 type Update struct {
 	UpdateID      int                `json:"update_id"`
 	Message       *Message           `json:"message,omitempty"`
 	CallbackQuery *CallbackQuery     `json:"callback_query,omitempty"`
 	ManagedBot    *ManagedBotUpdated `json:"managed_bot,omitempty"`
 	PreCheckoutQuery *PreCheckoutQuery `json:"pre_checkout_query,omitempty"`
+	GuestMessage     *Message           `json:"guest_message,omitempty"`
 }
 
 type Message struct {
@@ -34,6 +58,9 @@ type Message struct {
 	ForumTopicCreated *ForumTopicCreated `json:"forum_topic_created,omitempty"`
 	ReplyToMessage    *Message           `json:"reply_to_message,omitempty"`
 	SuccessfulPayment *SuccessfulPayment `json:"successful_payment,omitempty"`
+	GuestBotCallerUser *User              `json:"guest_bot_caller_user,omitempty"`
+	GuestBotCallerChat *Chat              `json:"guest_bot_caller_chat,omitempty"`
+	GuestQueryID       string             `json:"guest_query_id,omitempty"`
 }
 
 type ManagedBotUpdated struct {
@@ -62,6 +89,39 @@ type User struct {
 	Username         string `json:"username,omitempty"`
 	HasTopicsEnabled bool   `json:"has_topics_enabled,omitempty"`
 	CanManageBots    bool   `json:"can_manage_bots,omitempty"`
+	SupportsGuestQueries bool   `json:"supports_guest_queries,omitempty"`
+}
+
+func (c *Client) AnswerGuestQuery(req AnswerGuestQueryReq) (*SentGuestMessage, error) {
+	url := fmt.Sprintf("%s/answerGuestQuery", c.baseURL)
+	jsonData, err := json.Marshal(req)
+	if err != nil {
+		log.Printf("Error marshaling answer guest query request: %v\n", err)
+		return nil, err
+	}
+
+	resp, err := c.httpClient.Post(url, "application/json", bytes.NewBuffer(jsonData))
+	if err != nil {
+		log.Printf("Error sending answer guest query: %v\n", err)
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != http.StatusOK {
+		err := fmt.Errorf("telegram returned status %d: %s", resp.StatusCode, string(body))
+		log.Printf("%v\n", err)
+		return nil, err
+	}
+
+	var result struct {
+		Ok     bool             `json:"ok"`
+		Result SentGuestMessage `json:"result"`
+	}
+	json.Unmarshal(body, &result)
+
+	return &result.Result, nil
 }
 
 type Chat struct {
