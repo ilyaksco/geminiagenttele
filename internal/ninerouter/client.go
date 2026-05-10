@@ -95,3 +95,85 @@ func (c *Client) GenerateChat(prompt string, history []Message, model string, ap
 
 	return "", fmt.Errorf("9Router tidak memberikan jawaban (kosong)")
 }
+
+// --- TAMBAHKAN FUNGSI INI DI PALING BAWAH NINEROUTER.GO ---
+
+// GenerateCopilotChat menghubungi server asli GitHub Copilot (Tanpa lewat 9Router)
+func (c *Client) GenerateCopilotChat(prompt string, history []Message, model string, githubToken string) (string, error) {
+	// 1. TUKAR TOKEN: Token biasa harus ditukar dengan Copilot Session Token
+	reqToken, _ := http.NewRequest("GET", "https://api.github.com/copilot_internal/v2/token", nil)
+	reqToken.Header.Set("Authorization", "Bearer "+githubToken)
+	reqToken.Header.Set("User-Agent", "GitHubCopilotChat/0.11.1")
+	reqToken.Header.Set("Accept", "application/json")
+
+	respToken, err := c.HttpClient.Do(reqToken)
+	if err != nil {
+		return "", fmt.Errorf("gagal menghubungi GitHub: %v", err)
+	}
+	defer respToken.Body.Close()
+
+	if respToken.StatusCode != 200 {
+		return "", fmt.Errorf("akun Anda tidak memiliki langganan GitHub Copilot yang aktif")
+	}
+
+	var tokenData struct {
+		Token string `json:"token"`
+	}
+	json.NewDecoder(respToken.Body).Decode(&tokenData)
+	copilotSessionToken := tokenData.Token
+
+	// 2. KIRIM CHAT: Kirim pesan langsung ke Server Asli GitHub Copilot
+	messages := []Message{{Role: "system", Content: prompt}}
+	messages = append(messages, history...)
+
+	reqBody := map[string]interface{}{
+		"model":    model,
+		"messages": messages,
+	}
+	jsonData, _ := json.Marshal(reqBody)
+
+	req, _ := http.NewRequest("POST", "https://api.githubcopilot.com/chat/completions", bytes.NewBuffer(jsonData))
+	
+	// Gunakan token session yang baru saja ditukar
+	req.Header.Set("Authorization", "Bearer "+copilotSessionToken)
+	req.Header.Set("Content-Type", "application/json")
+	
+	// Header sakti agar dianggap sebagai aplikasi resmi (Bypass blokir)
+	req.Header.Set("Editor-Version", "vscode/1.85.0")
+	req.Header.Set("Editor-Plugin-Version", "copilot-chat/0.11.1")
+	req.Header.Set("User-Agent", "GitHubCopilotChat/0.11.1")
+
+	log.Printf("⏳ Mengirim chat LANGSUNG ke api.githubcopilot.com dengan model: %s...\n", model)
+
+	resp, err := c.HttpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	rawString := string(body)
+
+	if resp.StatusCode != 200 {
+		log.Printf("❌ Copilot Direct Error (Status %d): %s\n", resp.StatusCode, rawString)
+		return "", fmt.Errorf("api copilot menolak permintaan (status %d)", resp.StatusCode)
+	}
+
+	var result struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+
+	if err := json.Unmarshal([]byte(rawString), &result); err != nil {
+		return "", err
+	}
+
+	if len(result.Choices) > 0 {
+		return result.Choices[0].Message.Content, nil
+	}
+
+	return "", fmt.Errorf("copilot tidak memberikan jawaban")
+}

@@ -1046,9 +1046,7 @@ func (h *Handler) handleMessage(m *Message) {
 			replyText, err = h.gemini.GenerateChat(validKeys, actualPrompt, llmHistory, geminiModel)
 		
 		} else if isGitHub {
-			// Ambil kunci rahasia GitHub dari database
 			githubKey := h.db.GetUserGitHubKeys(ownerID)
-			
 			if githubKey == "" {
 				errMsg := "❌ Anda belum menautkan GitHub Copilot. Silakan setel API Key di menu utama."
 				if isGuest {
@@ -1059,7 +1057,6 @@ func (h *Handler) handleMessage(m *Message) {
 				return
 			}
 
-			// Format riwayat pesan agar dimengerti oleh 9Router
 			var ninerouterHistory []ninerouter.Message
 			for _, msg := range rawHistory {
 				role := msg.Role
@@ -1076,9 +1073,17 @@ func (h *Handler) handleMessage(m *Message) {
 				Content: fullMessage,
 			})
 
+			// 1. Bersihkan awalan "gh/" karena kita kirim ke server asli (wajib!)
+			cleanModelName := strings.TrimPrefix(model, "gh/")
 
-			// Panggil 9Router, tapi sisipkan token GitHub di belakangnya!
-			replyText, err = h.ninerouter.GenerateChat(actualPrompt, ninerouterHistory, model, githubKey)
+			// 2. Panggil fungsi Copilot Asli, bukan fungsi 9router biasa
+			replyText, err = h.ninerouter.GenerateCopilotChat(actualPrompt, ninerouterHistory, cleanModelName, githubKey)
+			
+			// Jika gagal karena langganan tidak ada
+			if err != nil {
+				h.sendMsg(m.Chat.ID, m.MessageThreadID, m.MessageID, "❌ Gagal: "+err.Error(), true, nil)
+				return
+			}
 		
 		} else if isOpenCode {
 			// PEMBARUAN: Logika khusus untuk OpenCode via 9Router (Bypass API Key)

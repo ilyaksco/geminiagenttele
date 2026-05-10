@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	githubClientID      = "Ov23lid7Qf0j1vlrYaJC" // PASTIKAN CLIENT ID ANDA SUDAH BENAR DI SINI
+	githubClientID      = "01ab8ac9400c4e429b23" // PASTIKAN CLIENT ID ANDA SUDAH BENAR DI SINI
 	githubDeviceCodeURL = "https://github.com/login/device/code"
 	githubTokenURL      = "https://github.com/login/oauth/access_token"
 )
