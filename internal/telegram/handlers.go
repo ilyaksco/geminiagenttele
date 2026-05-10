@@ -9,6 +9,7 @@ import (
 	"gemini-agent/internal/groq"
 	"gemini-agent/internal/i18n"
 	"gemini-agent/internal/tavily"
+	"gemini-agent/internal/ninerouter"
 	"log"
 	"regexp"
 	"strings"
@@ -20,6 +21,7 @@ type Handler struct {
 	db            *database.DB
 	llm           *groq.Client
 	gemini        *gemini.Client
+	ninerouter    *ninerouter.Client
 	i18n          *i18n.I18n
 	PremiumCfg    *config.PremiumConfig
 	BotUser       *User
@@ -38,6 +40,7 @@ func NewHandler(tg *Client, db *database.DB, llm *groq.Client, geminiClient *gem
 		db:            db,
 		llm:           llm,
 		gemini:        geminiClient,
+		ninerouter: ninerouter.NewClient(),
 		i18n:          i18n,
 		PremiumCfg:    premiumCfg,
 		BotUser:       botUser,
@@ -650,11 +653,13 @@ func (h *Handler) sendModelSelection(chatID int64, msgID int, botID int64, lang 
 
 	btnGroq := h.i18n.Get(lang, "model_group_groq")
 	btnGemini := h.i18n.Get(lang, "model_group_gemini")
+	btnOpenCode := "OpenCode (Without API Key)"
 
 	markup := InlineKeyboardMarkup{
 		InlineKeyboard: [][]InlineKeyboardButton{
 			{{Text: btnGroq, CallbackData: fmt.Sprintf("bot_providermodel_%d_groq", botID)}},
 			{{Text: btnGemini, CallbackData: fmt.Sprintf("bot_providermodel_%d_gemini", botID)}},
+			{{Text: btnOpenCode, CallbackData: fmt.Sprintf("bot_providermodel_%d_opencode", botID)}}, // Menu baru
 			{{Text: "🔙", CallbackData: fmt.Sprintf("bot_manage_%d", botID)}},
 		},
 	}
@@ -667,26 +672,35 @@ func (h *Handler) sendModelListByProvider(chatID int64, msgID int, botID int64, 
 		text = "⚙️ **Select AI Model**"
 	}
 
-	modelDataStr := h.i18n.Get(lang, "models_list")
-	modelList := strings.Split(modelDataStr, ",")
-
 	var buttons [][]InlineKeyboardButton
 
-	for _, m := range modelList {
-		parts := strings.Split(m, "|")
-		if len(parts) == 3 {
-			shortcode := parts[0]
-			displayName := parts[1]
-			actualModel := parts[2]
+	// PEMBARUAN: Tangani khusus untuk provider OpenCode
+	if provider == "opencode" {
+		// Tambahkan model OpenCode secara hardcode agar lebih mudah (shortcode: ocauto, occlaude)
+		buttons = append(buttons, []InlineKeyboardButton{{Text: "Minimax M2.5 Free", CallbackData: fmt.Sprintf("bot_savemodel_%d_ocminimax", botID)}})
+		buttons = append(buttons, []InlineKeyboardButton{{Text: "Nemotron 3", CallbackData: fmt.Sprintf("bot_savemodel_%d_ocglm", botID)}})
+	} else {
+		// LOGIKA LAMA: Berjalan hanya jika provider adalah "groq" atau "gemini"
+		modelDataStr := h.i18n.Get(lang, "models_list")
+		modelList := strings.Split(modelDataStr, ",")
 
-			isGemini := strings.HasPrefix(actualModel, "gemini/")
-			
-			if (provider == "gemini" && isGemini) || (provider == "groq" && !isGemini) {
-				buttons = append(buttons, []InlineKeyboardButton{{Text: displayName, CallbackData: fmt.Sprintf("bot_savemodel_%d_%s", botID, shortcode)}})
+		for _, m := range modelList {
+			parts := strings.Split(m, "|")
+			if len(parts) == 3 {
+				shortcode := parts[0]
+				displayName := parts[1]
+				actualModel := parts[2]
+
+				isGemini := strings.HasPrefix(actualModel, "gemini/")
+				
+				if (provider == "gemini" && isGemini) || (provider == "groq" && !isGemini) {
+					buttons = append(buttons, []InlineKeyboardButton{{Text: displayName, CallbackData: fmt.Sprintf("bot_savemodel_%d_%s", botID, shortcode)}})
+				}
 			}
 		}
 	}
 
+	// Tambahkan tombol kembali (selalu ada di bawah)
 	buttons = append(buttons, []InlineKeyboardButton{{Text: "🔙", CallbackData: fmt.Sprintf("bot_setmodel_%d", botID)}})
 
 	markup := InlineKeyboardMarkup{InlineKeyboard: buttons}
@@ -989,6 +1003,7 @@ func (h *Handler) handleMessage(m *Message) {
 		var err error
 
 		isGemini := strings.HasPrefix(model, "gemini/")
+		isOpenCode := strings.HasPrefix(model, "oc/")
 		var validKeys []string
 
 		if isGemini {
@@ -1016,6 +1031,27 @@ func (h *Handler) handleMessage(m *Message) {
 
 			llmHistory := buildGeminiHistory(rawHistory, fullMessage)
 			replyText, err = h.gemini.GenerateChat(validKeys, actualPrompt, llmHistory, geminiModel)
+		
+		} else if isOpenCode {
+			// PEMBARUAN: Logika khusus untuk OpenCode via 9Router (Bypass API Key)
+			var ninerouterHistory []ninerouter.Message
+			for _, msg := range rawHistory {
+				role := msg.Role
+				if role == "model" {
+					role = "assistant"
+				}
+				ninerouterHistory = append(ninerouterHistory, ninerouter.Message{
+					Role:    role,
+					Content: msg.Content,
+				})
+			}
+			ninerouterHistory = append(ninerouterHistory, ninerouter.Message{
+				Role:    "user",
+				Content: fullMessage,
+			})
+
+			replyText, err = h.ninerouter.GenerateChat(actualPrompt, ninerouterHistory, model)
+
 		} else {
 			encryptedKeys := h.db.GetUserAPIKeys(ownerID)
 			decryptedKeys := ""
@@ -1041,6 +1077,8 @@ func (h *Handler) handleMessage(m *Message) {
 			llmHistory := buildGroqHistory(rawHistory, fullMessage)
 			replyText, err = h.llm.GenerateChat(validKeys, actualPrompt, llmHistory, model)
 		}
+
+		
 
 		if err == nil && useSearch {
 			reSearch := regexp.MustCompile(`\[SEARCH:\s*(.*?)\]`)
@@ -1179,18 +1217,28 @@ func (h *Handler) handleCallbackQuery(cq *CallbackQuery) {
 		case "savemodel":
 			if len(parts) >= 4 {
 				shortcode := parts[3]
-				modelDataStr := h.i18n.Get(lang, "models_list")
-				modelList := strings.Split(modelDataStr, ",")
 				selectedModel := ""
-				
-				for _, m := range modelList {
-					mParts := strings.Split(m, "|")
-					if len(mParts) == 3 && mParts[0] == shortcode {
-						selectedModel = mParts[2]
-						break
+
+				// 1. TANGKAP SHORTCODE KHUSUS OPENCODE
+				if shortcode == "ocminimax" {
+					selectedModel = "oc/minimax-m2.5-free"
+				} else if shortcode == "ocglm" {
+					selectedModel = "oc/nemotron-3-super-free"
+				} else {
+					// 2. LOGIKA LAMA: Cari model Groq/Gemini di locales
+					modelDataStr := h.i18n.Get(lang, "models_list")
+					modelList := strings.Split(modelDataStr, ",")
+					
+					for _, m := range modelList {
+						mParts := strings.Split(m, "|")
+						if len(mParts) == 3 && mParts[0] == shortcode {
+							selectedModel = mParts[2]
+							break
+						}
 					}
 				}
 
+				// 3. BLOK PENGECEKAN API KEY & PENYIMPANAN DATABASE (KODE ANDA)
 				if selectedModel != "" {
 					ownerID := h.db.GetBotOwner(targetBotID)
 					hasKey := false
@@ -1200,6 +1248,9 @@ func (h *Handler) handleCallbackQuery(cq *CallbackQuery) {
 						if keys != "" {
 							hasKey = true
 						}
+					} else if strings.HasPrefix(selectedModel, "oc/") {
+						// BYPASS API KEY UNTUK OPENCODE
+						hasKey = true
 					} else {
 						keys := h.db.GetUserAPIKeys(ownerID)
 						if keys != "" {
