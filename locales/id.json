@@ -54,5 +54,11 @@
   "btn_back_to_dashboard": "🔙 Kembali ke Dashboard",
 
   "provider_select_msg": "⚙️ **Pilih Penyedia Layanan AI**\n\nLayanan mana yang ingin Anda gunakan untuk bot ini?",
-  "model_select_msg": "⚙️ **Pilih Model AI**\n\nPilih model spesifik dari layanan yang Anda pilih:"
+  "model_select_msg": "⚙️ **Pilih Model AI**\n\nPilih model spesifik dari layanan yang Anda pilih:",
+
+  "oauth_github_btn": "🔐 Login GitHub Copilot",
+  "oauth_github_instruction": "👋 **Tautkan GitHub Copilot**\n\n1. Buka link: %s\n2. Masukkan kode ini: `%s`\n\n🕒 _Bot akan otomatis memberitahu jika Anda sudah berhasil login._",
+  "oauth_github_success": "✅ **Login Berhasil!**\n\nAkun GitHub Anda sudah terhubung. Sekarang Anda bisa menggunakan model Copilot di menu pilihan model.",
+  "oauth_github_timeout": "❌ Waktu login habis. Silakan klik ulang untuk mencoba lagi.",
+  "oauth_github_error": "❌ Gagal menghubungi GitHub. Coba lagi nanti."
 }

@@ -639,6 +639,7 @@ func (h *Handler) sendApiSelectionMenu(chatID int64, msgID int, lang string) {
 			{{Text: btnGroq, CallbackData: "action_setapigroq"}},
 			{{Text: btnGemini, CallbackData: "action_setapigemini"}},
 			{{Text: btnTavily, CallbackData: "action_setapitavily"}},
+			{{Text: "GitHub Copilot", CallbackData: "action_setapigithub"}},
 			{{Text: btnBack, CallbackData: "action_back"}},
 		},
 	}
@@ -660,6 +661,7 @@ func (h *Handler) sendModelSelection(chatID int64, msgID int, botID int64, lang 
 			{{Text: btnGroq, CallbackData: fmt.Sprintf("bot_providermodel_%d_groq", botID)}},
 			{{Text: btnGemini, CallbackData: fmt.Sprintf("bot_providermodel_%d_gemini", botID)}},
 			{{Text: btnOpenCode, CallbackData: fmt.Sprintf("bot_providermodel_%d_opencode", botID)}}, // Menu baru
+			{{Text: "GitHub Copilot", CallbackData: fmt.Sprintf("bot_providermodel_%d_github", botID)}},
 			{{Text: "🔙", CallbackData: fmt.Sprintf("bot_manage_%d", botID)}},
 		},
 	}
@@ -674,13 +676,23 @@ func (h *Handler) sendModelListByProvider(chatID int64, msgID int, botID int64, 
 
 	var buttons [][]InlineKeyboardButton
 
-	// PEMBARUAN: Tangani khusus untuk provider OpenCode
 	if provider == "opencode" {
-		// Tambahkan model OpenCode secara hardcode agar lebih mudah (shortcode: ocauto, occlaude)
+		// Tambahkan model OpenCode secara hardcode agar lebih mudah
 		buttons = append(buttons, []InlineKeyboardButton{{Text: "Minimax M2.5 Free", CallbackData: fmt.Sprintf("bot_savemodel_%d_ocminimax", botID)}})
 		buttons = append(buttons, []InlineKeyboardButton{{Text: "Nemotron 3", CallbackData: fmt.Sprintf("bot_savemodel_%d_ocglm", botID)}})
+		
+	} else if provider == "github" {
+		// Tambahan model GitHub Copilot (Format disamakan dengan gaya penulisan kode di atas)
+		buttons = append(buttons, []InlineKeyboardButton{{Text: "OSWE VSCode Prime", CallbackData: fmt.Sprintf("bot_savemodel_%d_ghoswe", botID)}})
+		buttons = append(buttons, []InlineKeyboardButton{{Text: "Claude Haiku 4.5", CallbackData: fmt.Sprintf("bot_savemodel_%d_ghhaiku", botID)}})
+		buttons = append(buttons, []InlineKeyboardButton{{Text: "GPT 5 Mini", CallbackData: fmt.Sprintf("bot_savemodel_%d_ghgpt5m", botID)}})
+		buttons = append(buttons, []InlineKeyboardButton{{Text: "GPT 4.1", CallbackData: fmt.Sprintf("bot_savemodel_%d_ghgpt41", botID)}})
+		buttons = append(buttons, []InlineKeyboardButton{{Text: "GPT 4o Mini", CallbackData: fmt.Sprintf("bot_savemodel_%d_ghgpt4om", botID)}})
+		buttons = append(buttons, []InlineKeyboardButton{{Text: "GPT 4o", CallbackData: fmt.Sprintf("bot_savemodel_%d_ghgpt4o", botID)}})
+		buttons = append(buttons, []InlineKeyboardButton{{Text: "GPT 4", CallbackData: fmt.Sprintf("bot_savemodel_%d_ghgpt4", botID)}})
+		
 	} else {
-		// LOGIKA LAMA: Berjalan hanya jika provider adalah "groq" atau "gemini"
+		// Logika bawaan untuk provider lain (Groq/Gemini via list di locales)
 		modelDataStr := h.i18n.Get(lang, "models_list")
 		modelList := strings.Split(modelDataStr, ",")
 
@@ -1004,6 +1016,7 @@ func (h *Handler) handleMessage(m *Message) {
 
 		isGemini := strings.HasPrefix(model, "gemini/")
 		isOpenCode := strings.HasPrefix(model, "oc/")
+		isGitHub := strings.HasPrefix(model, "gh/") // ---> TAMBAHAN 1: Deteksi awalan gh/
 		var validKeys []string
 
 		if isGemini {
@@ -1032,6 +1045,41 @@ func (h *Handler) handleMessage(m *Message) {
 			llmHistory := buildGeminiHistory(rawHistory, fullMessage)
 			replyText, err = h.gemini.GenerateChat(validKeys, actualPrompt, llmHistory, geminiModel)
 		
+		} else if isGitHub {
+			// Ambil kunci rahasia GitHub dari database
+			githubKey := h.db.GetUserGitHubKeys(ownerID)
+			
+			if githubKey == "" {
+				errMsg := "❌ Anda belum menautkan GitHub Copilot. Silakan setel API Key di menu utama."
+				if isGuest {
+					h.sendGuestMsg(m.GuestQueryID, errMsg, true, nil)
+				} else {
+					h.sendMsg(m.Chat.ID, m.MessageThreadID, m.MessageID, errMsg, true, nil)
+				}
+				return
+			}
+
+			// Format riwayat pesan agar dimengerti oleh 9Router
+			var ninerouterHistory []ninerouter.Message
+			for _, msg := range rawHistory {
+				role := msg.Role
+				if role == "model" {
+					role = "assistant"
+				}
+				ninerouterHistory = append(ninerouterHistory, ninerouter.Message{
+					Role:    role,
+					Content: msg.Content,
+				})
+			}
+			ninerouterHistory = append(ninerouterHistory, ninerouter.Message{
+				Role:    "user",
+				Content: fullMessage,
+			})
+
+
+			// Panggil 9Router, tapi sisipkan token GitHub di belakangnya!
+			replyText, err = h.ninerouter.GenerateChat(actualPrompt, ninerouterHistory, model, githubKey)
+		
 		} else if isOpenCode {
 			// PEMBARUAN: Logika khusus untuk OpenCode via 9Router (Bypass API Key)
 			var ninerouterHistory []ninerouter.Message
@@ -1050,7 +1098,7 @@ func (h *Handler) handleMessage(m *Message) {
 				Content: fullMessage,
 			})
 
-			replyText, err = h.ninerouter.GenerateChat(actualPrompt, ninerouterHistory, model)
+			replyText, err = h.ninerouter.GenerateChat(actualPrompt, ninerouterHistory, model, "")
 
 		} else {
 			encryptedKeys := h.db.GetUserAPIKeys(ownerID)
@@ -1203,7 +1251,6 @@ func (h *Handler) handleCallbackQuery(cq *CallbackQuery) {
 		var targetBotID int64
 		fmt.Sscanf(botIDStr, "%d", &targetBotID)
 
-		
 		switch parts[1] {
 		case "manage":
 			h.sendBotDashboard(cq.Message.Chat.ID, msgID, targetBotID, lang)
@@ -1219,11 +1266,28 @@ func (h *Handler) handleCallbackQuery(cq *CallbackQuery) {
 				shortcode := parts[3]
 				selectedModel := ""
 
-				// 1. TANGKAP SHORTCODE KHUSUS OPENCODE
+				// 1. TANGKAP SHORTCODE KHUSUS OPENCODE & GITHUB
 				if shortcode == "ocminimax" {
 					selectedModel = "oc/minimax-m2.5-free"
 				} else if shortcode == "ocglm" {
 					selectedModel = "oc/nemotron-3-super-free"
+					
+				// ---> TAMBAHAN UNTUK GITHUB SINI <---
+				} else if shortcode == "ghoswe" {
+					selectedModel = "gh/oswe-vscode-prime"
+				} else if shortcode == "ghhaiku" {
+					selectedModel = "gh/claude-haiku-4.5"
+				} else if shortcode == "ghgpt5m" {
+					selectedModel = "gh/gpt-5-mini"
+				} else if shortcode == "ghgpt41" {
+					selectedModel = "gh/gpt-4.1"
+				} else if shortcode == "ghgpt4om" {
+					selectedModel = "gh/gpt-4o-mini"
+				} else if shortcode == "ghgpt4o" {
+					selectedModel = "gh/gpt-4o"
+				} else if shortcode == "ghgpt4" {
+					selectedModel = "gh/gpt-4"
+					
 				} else {
 					// 2. LOGIKA LAMA: Cari model Groq/Gemini di locales
 					modelDataStr := h.i18n.Get(lang, "models_list")
@@ -1238,7 +1302,7 @@ func (h *Handler) handleCallbackQuery(cq *CallbackQuery) {
 					}
 				}
 
-				// 3. BLOK PENGECEKAN API KEY & PENYIMPANAN DATABASE (KODE ANDA)
+				// 3. BLOK PENGECEKAN API KEY & PENYIMPANAN DATABASE
 				if selectedModel != "" {
 					ownerID := h.db.GetBotOwner(targetBotID)
 					hasKey := false
@@ -1251,6 +1315,14 @@ func (h *Handler) handleCallbackQuery(cq *CallbackQuery) {
 					} else if strings.HasPrefix(selectedModel, "oc/") {
 						// BYPASS API KEY UNTUK OPENCODE
 						hasKey = true
+						
+					} else if strings.HasPrefix(selectedModel, "gh/") {
+						// GANTI DENGAN FUNGSI ASLI UNTUK CEK KEY GITHUB
+						keys := h.db.GetUserGitHubKeys(ownerID)
+						if keys != "" {
+							hasKey = true
+						}
+						
 					} else {
 						keys := h.db.GetUserAPIKeys(ownerID)
 						if keys != "" {
@@ -1271,6 +1343,7 @@ func (h *Handler) handleCallbackQuery(cq *CallbackQuery) {
 					h.sendBotDashboard(cq.Message.Chat.ID, msgID, targetBotID, lang)
 				}
 			}
+
 		case "prompt":
 			text := "📝 **Set System Prompt**\n\nPlease send the new prompt text for this bot."
 			if lang == "id" {
@@ -1286,6 +1359,7 @@ func (h *Handler) handleCallbackQuery(cq *CallbackQuery) {
 			h.handleDeleteBotFlow(cq.Message.Chat.ID, msgID, targetBotID, lang, false)
 		case "confirmdel":
 			h.handleDeleteBotFlow(cq.Message.Chat.ID, msgID, targetBotID, lang, true)
+		
 		}
 		return
 	}
@@ -1303,6 +1377,7 @@ func (h *Handler) handleCallbackQuery(cq *CallbackQuery) {
 		return
 	}
 
+	// BLOK GLOBAL ACTION
 	if parts[0] == "action" {
 		switch parts[1] {
 		case "create":
@@ -1326,8 +1401,44 @@ func (h *Handler) handleCallbackQuery(cq *CallbackQuery) {
 			h.sendApiSelectionMenu(cq.Message.Chat.ID, msgID, lang)
 		case "setapigroq": 
 			h.handleSetApiFlow(cq.From.ID, cq.Message.Chat.ID, cq.Message.MessageThreadID, msgID, lang, "groq")
-		case "setapigemini": // PEMBARUAN: Sesuaikan dengan tombol
+		case "setapigemini": 
 			h.handleSetApiFlow(cq.From.ID, cq.Message.Chat.ID, cq.Message.MessageThreadID, msgID, lang, "gemini")
+			
+		// ---> INI LETAK YANG BENAR UNTUK PEMANGGILAN GITHUB <---
+		case "setapigithub":
+			// 1. Cek apakah pengguna sudah memiliki token di database
+			existingKey := h.db.GetUserGitHubKeys(cq.From.ID)
+			
+			if existingKey != "" {
+				// 2. Jika SUDAH terhubung, tampilkan status & tombol "Tautkan Ulang"
+				text := "✅ **GitHub Copilot Terhubung**\n\nAkun Anda sudah tertaut dengan sistem. Apakah Anda ingin menautkan ulang dengan akun yang berbeda?"
+				btnReconnect := "🔄 Tautkan Ulang"
+				btnBack := "🔙 Kembali"
+
+				if lang == "en" {
+					text = "✅ **GitHub Copilot Connected**\n\nYour account is already linked. Do you want to reconnect with a different account?"
+					btnReconnect = "🔄 Reconnect"
+					btnBack = "🔙 Back"
+				}
+
+				markup := InlineKeyboardMarkup{
+					InlineKeyboard: [][]InlineKeyboardButton{
+						{{Text: btnReconnect, CallbackData: "action_reconnectgithub"}},
+						// Tombol back mengarah kembali ke menu pilihan API
+						{{Text: btnBack, CallbackData: "action_back"}}, 
+					},
+				}
+				h.editMsg(cq.Message.Chat.ID, cq.Message.MessageID, text, true, markup)
+			} else {
+				// 3. Jika BELUM terhubung, langsung berikan instruksi login (link & kode)
+				h.StartGitHubOAuth(cq.Message.Chat.ID, cq.Message.MessageID, cq.From.ID, lang)
+			}
+
+		// TAMBAHKAN CASE BARU INI TEPAT DI BAWAHNYA:
+		case "reconnectgithub":
+			// Jika pengguna sengaja menekan "Tautkan Ulang", paksa bot membuat kode baru
+			h.StartGitHubOAuth(cq.Message.Chat.ID, cq.Message.MessageID, cq.From.ID, lang)
+			
 		case "tutorialapi":
 			h.sendApiTutorial(cq.Message.Chat.ID, msgID, lang)
 		case "tutorialgemini":
@@ -1345,8 +1456,6 @@ func (h *Handler) handleCallbackQuery(cq *CallbackQuery) {
 		}
 	}
 }
-
-
 
 func (h *Handler) sendMainMenu(chatID int64, threadID int, msgID int, lang string, text string) {
 	btnCreate := h.i18n.Get(lang, "btn_create")

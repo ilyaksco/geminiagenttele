@@ -79,6 +79,7 @@ func New(dbURL string) *DB {
 	_, _ = conn.Exec(`ALTER TABLE managed_bots ADD COLUMN owner_id INTEGER DEFAULT 0;`)
 	_, _ = conn.Exec(`ALTER TABLE users ADD COLUMN encrypted_api_keys TEXT DEFAULT '';`)
 	_, _ = conn.Exec(`ALTER TABLE users ADD COLUMN encrypted_gemini_keys TEXT DEFAULT '';`)
+	_, _ = conn.Exec(`ALTER TABLE users ADD COLUMN encrypted_github_keys TEXT DEFAULT '';`)
 	_, _ = conn.Exec(`ALTER TABLE users ADD COLUMN encrypted_tavily_keys TEXT DEFAULT '';`)
 	_, _ = conn.Exec(`ALTER TABLE users ADD COLUMN premium_until DATETIME;`)
 	_, _ = conn.Exec(`ALTER TABLE managed_bots ADD COLUMN model TEXT DEFAULT 'openai/gpt-oss-120b';`)
@@ -137,6 +138,13 @@ func (db *DB) GrantPremium(ownerID int64, days int) {
 		log.Printf("Failed to grant premium: %v\n", err)
 	}
 }
+
+
+
+// SetUserAPIKey menyimpan API Key dari berbagai provider ke dalam database
+// SetUserAPIKey menyimpan API Key dari berbagai provider ke dalam database
+// SetGitHubKey khusus untuk menyimpan token OAuth GitHub
+
 
 func (db *DB) SetUserAPIKeys(userID int64, encryptedKeys string) {
 	query := `INSERT INTO users (id, encrypted_api_keys) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET encrypted_api_keys = ?;`
@@ -389,6 +397,27 @@ func (db *DB) SetUserTavilyKeys(userID int64, encryptedKeys string) {
 func (db *DB) GetUserTavilyKeys(userID int64) string {
 	var keys sql.NullString
 	query := `SELECT encrypted_tavily_keys FROM users WHERE id = ?;`
+	err := db.Conn.QueryRow(query, userID).Scan(&keys)
+	if err != nil {
+		return ""
+	}
+	if keys.Valid {
+		return keys.String
+	}
+	return ""
+}
+
+func (db *DB) SetGitHubKey(userID int64, encryptedKeys string) {
+	query := `INSERT INTO users (id, encrypted_github_keys) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET encrypted_github_keys = ?;`
+	_, err := db.Conn.Exec(query, userID, encryptedKeys, encryptedKeys)
+	if err != nil {
+		log.Printf("Failed to save user GitHub keys: %v\n", err)
+	}
+}
+
+func (db *DB) GetUserGitHubKeys(userID int64) string {
+	var keys sql.NullString
+	query := `SELECT encrypted_github_keys FROM users WHERE id = ?;`
 	err := db.Conn.QueryRow(query, userID).Scan(&keys)
 	if err != nil {
 		return ""

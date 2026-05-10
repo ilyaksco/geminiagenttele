@@ -30,7 +30,7 @@ func NewClient() *Client {
 	}
 }
 
-func (c *Client) GenerateChat(prompt string, history []Message, model string) (string, error) {
+func (c *Client) GenerateChat(prompt string, history []Message, model string, apiKey string) (string, error) {
 	messages := []Message{{Role: "system", Content: prompt}}
 	messages = append(messages, history...)
 
@@ -41,9 +41,13 @@ func (c *Client) GenerateChat(prompt string, history []Message, model string) (s
 
 	jsonData, _ := json.Marshal(reqBody)
 	req, _ := http.NewRequest("POST", c.BaseURL, bytes.NewBuffer(jsonData))
+
+	if apiKey == "" {
+		apiKey = "sk_9router"
+	}
 	
 	// PERBAIKAN: Gunakan API Key asli dari 9Router!
-	req.Header.Set("Authorization", "Bearer sk_9router")
+	req.Header.Set("Authorization", "Bearer sk_9router"+apiKey)
 	req.Header.Set("Content-Type", "application/json")
 
 	// LOG: Cetak info bahwa bot sedang mengirim permintaan ke 9Router
@@ -67,6 +71,7 @@ func (c *Client) GenerateChat(prompt string, history []Message, model string) (s
 	// ---------------------------------------------------------
 
 	if resp.StatusCode != 200 {
+		log.Printf("❌ 9Router Error (Status %d): %s\n", resp.StatusCode, rawString)
 		return "", fmt.Errorf("9Router error: status %d", resp.StatusCode)
 	}
 
