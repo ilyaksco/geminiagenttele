@@ -944,6 +944,17 @@ func (h *Handler) handleMessage(m *Message) {
 			h.botTracker.ResetChain(m.Chat.ID)
 		}
 
+		historyChatID := m.Chat.ID
+		if isGuest {
+			if m.GuestBotCallerChat != nil && m.GuestBotCallerChat.ID != 0 {
+				historyChatID = m.GuestBotCallerChat.ID
+			} else if m.GuestBotCallerUser != nil && m.GuestBotCallerUser.ID != 0 {
+				historyChatID = m.GuestBotCallerUser.ID
+			} else if m.Chat.ID == 0 {
+				historyChatID = m.From.ID
+			}
+		}
+
 		if strings.HasPrefix(m.Text, "/start") {
 			msg := fmt.Sprintf("Hello, I am **%s**!", h.BotUser.FirstName)
 			if isGuest {
@@ -955,7 +966,7 @@ func (h *Handler) handleMessage(m *Message) {
 		}
 
 		if strings.HasPrefix(m.Text, "/newchat") {
-			_ = h.db.ClearChatHistory(h.BotUser.ID, m.Chat.ID, m.MessageThreadID)
+			_ = h.db.ClearChatHistory(h.BotUser.ID, historyChatID, m.MessageThreadID)
 			if isGuest {
 				h.sendGuestMsg(m.GuestQueryID, h.i18n.Get(lang, "chat_cleared"), true, nil)
 			} else {
@@ -993,9 +1004,9 @@ func (h *Handler) handleMessage(m *Message) {
 			fullMessage = fmt.Sprintf("[Context - Replying to @%s: \"%s\"]\n\n%s", targetName, m.ReplyToMessage.Text, fullMessage)
 		}
 
-		h.db.SaveMessage(h.BotUser.ID, m.Chat.ID, m.MessageThreadID, "user", fullMessage)
+		h.db.SaveMessage(h.BotUser.ID, historyChatID, m.MessageThreadID, "user", fullMessage)
 
-		rawHistory := h.db.GetHistory(h.BotUser.ID, m.Chat.ID, m.MessageThreadID, 6)
+		rawHistory := h.db.GetHistory(h.BotUser.ID, historyChatID, m.MessageThreadID, 6)
 		systemPrompt := h.db.GetBotPrompt(h.BotUser.ID)
 
 		useSearch := strings.Contains(systemPrompt, "{search}")
@@ -1208,8 +1219,8 @@ func (h *Handler) handleMessage(m *Message) {
 			replyText = strings.TrimSpace(replyText)
 		}
 
-		h.db.SaveMessage(h.BotUser.ID, m.Chat.ID, m.MessageThreadID, "assistant", replyText)
-		
+		h.db.SaveMessage(h.BotUser.ID, historyChatID, m.MessageThreadID, "assistant", replyText)	
+			
 		if isGuest {
 			h.sendGuestMsg(m.GuestQueryID, replyText, true, nil)
 		} else {
