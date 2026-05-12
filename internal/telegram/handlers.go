@@ -945,6 +945,7 @@ func (h *Handler) handleMessage(m *Message) {
 		}
 
 		historyChatID := m.Chat.ID
+		
 		if isGuest {
 			if m.GuestBotCallerChat != nil && m.GuestBotCallerChat.ID != 0 {
 				historyChatID = m.GuestBotCallerChat.ID
@@ -955,10 +956,23 @@ func (h *Handler) handleMessage(m *Message) {
 			}
 		}
 
+		var guestMarkup interface{}
+		if isGuest {
+			btnCloseText := h.i18n.Get(lang, "btn_close")
+			if btnCloseText == "btn_close" {
+				btnCloseText = "❌ Close"
+			}
+			guestMarkup = InlineKeyboardMarkup{
+				InlineKeyboard: [][]InlineKeyboardButton{
+					{{Text: btnCloseText, CallbackData: "action_closeguest"}},
+				},
+			}
+		}
+
 		if strings.HasPrefix(m.Text, "/start") {
 			msg := fmt.Sprintf("Hello, I am **%s**!", h.BotUser.FirstName)
 			if isGuest {
-				h.sendGuestMsg(m.GuestQueryID, msg, true, nil)
+				h.sendGuestMsg(m.GuestQueryID, msg, true, guestMarkup)
 			} else {
 				h.sendMsg(m.Chat.ID, m.MessageThreadID, m.MessageID, msg, true, nil)
 			}
@@ -968,7 +982,7 @@ func (h *Handler) handleMessage(m *Message) {
 		if strings.HasPrefix(m.Text, "/newchat") {
 			_ = h.db.ClearChatHistory(h.BotUser.ID, historyChatID, m.MessageThreadID)
 			if isGuest {
-				h.sendGuestMsg(m.GuestQueryID, h.i18n.Get(lang, "chat_cleared"), true, nil)
+				h.sendGuestMsg(m.GuestQueryID, h.i18n.Get(lang, "chat_cleared"), true, guestMarkup)
 			} else {
 				h.sendMsg(m.Chat.ID, m.MessageThreadID, m.MessageID, h.i18n.Get(lang, "chat_cleared"), true, nil)
 			}
@@ -1046,7 +1060,7 @@ func (h *Handler) handleMessage(m *Message) {
 
 			if len(validKeys) == 0 {
 				if isGuest {
-					h.sendGuestMsg(m.GuestQueryID, h.i18n.Get(lang, "missing_gemini_api_key"), true, nil)
+					h.sendGuestMsg(m.GuestQueryID, h.i18n.Get(lang, "missing_gemini_api_key"), true, guestMarkup)
 				} else {
 					h.sendMsg(m.Chat.ID, m.MessageThreadID, m.MessageID, h.i18n.Get(lang, "missing_gemini_api_key"), true, nil)
 				}
@@ -1061,7 +1075,7 @@ func (h *Handler) handleMessage(m *Message) {
 			if githubKey == "" {
 				errMsg := "❌ Anda belum menautkan GitHub Copilot. Silakan setel API Key di menu utama."
 				if isGuest {
-					h.sendGuestMsg(m.GuestQueryID, errMsg, true, nil)
+					h.sendGuestMsg(m.GuestQueryID, errMsg, true, guestMarkup)
 				} else {
 					h.sendMsg(m.Chat.ID, m.MessageThreadID, m.MessageID, errMsg, true, nil)
 				}
@@ -1131,7 +1145,7 @@ func (h *Handler) handleMessage(m *Message) {
 
 			if len(validKeys) == 0 {
 				if isGuest {
-					h.sendGuestMsg(m.GuestQueryID, h.i18n.Get(lang, "missing_api_key"), true, nil)
+					h.sendGuestMsg(m.GuestQueryID, h.i18n.Get(lang, "missing_api_key"), true, guestMarkup)
 				} else {
 					h.sendMsg(m.Chat.ID, m.MessageThreadID, m.MessageID, h.i18n.Get(lang, "missing_api_key"), true, nil)
 				}
@@ -1222,7 +1236,7 @@ func (h *Handler) handleMessage(m *Message) {
 		h.db.SaveMessage(h.BotUser.ID, historyChatID, m.MessageThreadID, "assistant", replyText)	
 			
 		if isGuest {
-			h.sendGuestMsg(m.GuestQueryID, replyText, true, nil)
+			h.sendGuestMsg(m.GuestQueryID, replyText, true, guestMarkup)
 		} else {
 			h.sendMsg(m.Chat.ID, m.MessageThreadID, m.MessageID, replyText, true, nil)
 		}
@@ -1373,6 +1387,7 @@ func (h *Handler) handleCallbackQuery(cq *CallbackQuery) {
 			})
 		case "delete":
 			h.handleDeleteBotFlow(cq.Message.Chat.ID, msgID, targetBotID, lang, false)
+
 		case "confirmdel":
 			h.handleDeleteBotFlow(cq.Message.Chat.ID, msgID, targetBotID, lang, true)
 		
@@ -1396,6 +1411,52 @@ func (h *Handler) handleCallbackQuery(cq *CallbackQuery) {
 	// BLOK GLOBAL ACTION
 	if parts[0] == "action" {
 		switch parts[1] {
+
+		case "closeguest":
+			log.Printf("[DEBUG] Action closeguest triggered by user: %s (ID: %d)", cq.From.FirstName, cq.From.ID)
+			log.Printf("[DEBUG] cq.InlineMessageID: '%s'", cq.InlineMessageID)
+			if cq.Message != nil {
+				log.Printf("[DEBUG] cq.Message.ID: %d, Chat.ID: %d", cq.Message.MessageID, cq.Message.Chat.ID)
+			} else {
+				log.Printf("[DEBUG] cq.Message is NIL")
+			}
+
+			closerName := cq.From.FirstName
+			if cq.From.Username != "" {
+				closerName = "@" + cq.From.Username
+			}
+			
+			closeText := fmt.Sprintf(h.i18n.Get(lang, "msg_closed_by"), closerName)
+			if closeText == "msg_closed_by" || closeText == strings.Replace(closeText, "%s", closerName, 1) {
+				if lang == "id" {
+					closeText = fmt.Sprintf("Respon AI telah ditutup oleh %s", closerName)
+				} else {
+					closeText = fmt.Sprintf("AI response has been closed by %s", closerName)
+				}
+			}
+
+			req := EditMessageTextReq{
+				Text:      closeText,
+				ParseMode: "HTML",
+			}
+			
+			if cq.InlineMessageID != "" {
+				req.InlineMessageID = cq.InlineMessageID
+			} else if cq.Message != nil {
+				req.ChatID = cq.Message.Chat.ID
+				req.MessageID = cq.Message.MessageID
+			}
+			
+			log.Printf("[DEBUG] Sending EditMessageTextReq: %+v", req)
+			
+			err := h.tg.EditMessageText(req)
+			if err != nil {
+				log.Printf("[ERROR] Failed to close guest message: %v\n", err)
+			} else {
+				log.Printf("[DEBUG] Successfully closed guest message!")
+			}
+			return
+
 		case "create":
 			h.handleCreateBotFlow(cq.From.ID, cq.Message.Chat.ID, cq.Message.MessageThreadID, msgID, lang)
 		case "buypremium":

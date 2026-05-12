@@ -60,5 +60,8 @@
   "oauth_github_instruction": "👋 **Tautkan GitHub Copilot**\n\n1. Buka link: %s\n2. Masukkan kode ini: `%s`\n\n🕒 _Bot akan otomatis memberitahu jika Anda sudah berhasil login._",
   "oauth_github_success": "✅ **Login Berhasil!**\n\nAkun GitHub Anda sudah terhubung. Sekarang Anda bisa menggunakan model Copilot di menu pilihan model.",
   "oauth_github_timeout": "❌ Waktu login habis. Silakan klik ulang untuk mencoba lagi.",
-  "oauth_github_error": "❌ Gagal menghubungi GitHub. Coba lagi nanti."
+  "oauth_github_error": "❌ Gagal menghubungi GitHub. Coba lagi nanti.",
+
+  "btn_close": "❌ Tutup",
+  "msg_closed_by": "Respon AI telah ditutup oleh %s"
 }

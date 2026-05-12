@@ -79,6 +79,7 @@ type CallbackQuery struct {
 	ID      string   `json:"id"`
 	From    User     `json:"from"`
 	Message *Message `json:"message,omitempty"`
+	InlineMessageID string   `json:"inline_message_id,omitempty"`
 	Data    string   `json:"data"`
 }
 
@@ -139,11 +140,12 @@ type SendMessageReq struct {
 }
 
 type EditMessageTextReq struct {
-	ChatID      int64       `json:"chat_id"`
-	MessageID   int         `json:"message_id"`
-	Text        string      `json:"text"`
-	ParseMode   string      `json:"parse_mode,omitempty"`
-	ReplyMarkup interface{} `json:"reply_markup,omitempty"`
+	ChatID          int64       `json:"chat_id,omitempty"`
+	MessageID       int         `json:"message_id,omitempty"`
+	InlineMessageID string      `json:"inline_message_id,omitempty"`
+	Text            string      `json:"text"`
+	ParseMode       string      `json:"parse_mode,omitempty"`
+	ReplyMarkup     interface{} `json:"reply_markup,omitempty"`
 }
 
 type SendChatActionReq struct {
@@ -340,6 +342,13 @@ func (c *Client) EditMessageText(req EditMessageTextReq) error {
 		return err
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		err := fmt.Errorf("telegram edit message returned status %d: %s", resp.StatusCode, string(body))
+		log.Printf("API Error EditMessageText: %v\n", err)
+		return err
+	}
 	return nil
 }
 
